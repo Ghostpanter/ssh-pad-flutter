@@ -99,7 +99,8 @@ flutter run   # 需连接设备 / 模拟器
 
 ## 仓库说明
 
-- Kotlin 对照仓：`camilavivan/ssh-pad`（勿与本仓混淆）。
+- 发布仓：`Ghostpanter/ssh-pad-flutter`（原 `camilavivan/ssh-pad-flutter` 不可达时的镜像）。
+- Kotlin 对照仓：`camilavivan/ssh-pad` / `Ghostpanter/ssh-pad`（勿与本仓混淆）。
 - 应用 id：`com.sshtab.ssh_pad_flutter`
 - org：`com.sshtab`
 
@@ -110,7 +111,7 @@ flutter run   # 需连接设备 / 模拟器
 - **安全密钥存储**：密码 / 私钥 / 口令经 `flutter_secure_storage` 保存；SharedPreferences 仅存主机元数据；启动时迁移旧明文。
 - **双栏文件浏览器**：宽屏（≥600dp）左本地 / 右远程，支持上传、下载、远程 mkdir/删除；窄屏可切换显示本地栏。本地栏用 `stat`/`FileSystemEntity.type` 列举（不再依赖 `e is File`，避免 Android 上只见文件夹不见文件）；默认根目录为应用 `SSHPad` 文件夹；API≤32 可请求 `READ_EXTERNAL_STORAGE`；Android 13+ 受限路径请用应用目录或系统选取上传。
 - **会话日志**：设置页可查看近期连接 / 密钥 / 文件操作事件。
-- **安装**：从 [GitHub Releases](https://github.com/camilavivan/ssh-pad-flutter/releases) 下载 APK（`v0.5.8`）。
+- **安装**：从 [GitHub Releases](https://github.com/Ghostpanter/ssh-pad-flutter/releases) 下载 APK（`v0.5.8`）。
 
 ### 自行签名发版
 
