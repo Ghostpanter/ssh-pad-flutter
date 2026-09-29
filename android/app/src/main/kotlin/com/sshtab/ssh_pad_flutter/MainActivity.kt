@@ -26,6 +26,7 @@ import io.flutter.plugin.common.MethodChannel
 class MainActivity : FlutterActivity() {
     private val keepaliveChannelName = "com.sshtab.ssh_pad_flutter/keepalive"
     private val imeChannelName = "com.sshtab.ssh_pad_flutter/ime"
+    private val storageChannelName = "com.sshtab.ssh_pad_flutter/storage"
     private var keepaliveChannel: MethodChannel? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -94,6 +95,22 @@ class MainActivity : FlutterActivity() {
                     "hasHardwareKeyboard" -> {
                         result.success(hasHardwareKeyboard())
                     }
+                    "showSoftInput" -> {
+                        result.success(showSoftInput())
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, storageChannelName)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "requestReadStorage" -> {
+                        result.success(requestReadStorage())
+                    }
+                    "hasReadStorage" -> {
+                        result.success(hasReadStorage())
+                    }
                     else -> result.notImplemented()
                 }
             }
@@ -120,12 +137,52 @@ class MainActivity : FlutterActivity() {
 
     /**
      * Physical / Bluetooth keyboard attached.
-     * HARDKEYBOARDHIDDEN_NO or keyboard != NOKEYS.
+     *
+     * Do NOT trust Configuration.keyboard alone — OnePlus/ColorOS tablets often
+     * report KEYBOARD_QWERTY even with no BT keyboard, which falsely hid the
+     * soft IME and ExtraKeys. Enumerate InputDevices instead: a non-virtual
+     * device with SOURCE_KEYBOARD that is a full alphabetic keyboard counts.
      */
     private fun hasHardwareKeyboard(): Boolean {
+        try {
+            val ids = InputDevice.getDeviceIds()
+            for (id in ids) {
+                val device = InputDevice.getDevice(id) ?: continue
+                if (device.isVirtual) continue
+                val sources = device.sources
+                if (sources and InputDevice.SOURCE_KEYBOARD != InputDevice.SOURCE_KEYBOARD) {
+                    continue
+                }
+                // Full QWERTY / alphabetic keyboard (not a button pad / DPAD).
+                if (device.keyboardType == InputDevice.KEYBOARD_TYPE_ALPHABETIC) {
+                    Log.i(TAG, "hw keyboard detected: id=$id name=${device.name}")
+                    return true
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "hasHardwareKeyboard probe failed: $e")
+        }
+        // Fallback: only HARDKEYBOARDHIDDEN_NO (explicitly "keyboard present").
+        // Ignore keyboard != NOKEYS — that false-positives on ColorOS pads.
         val cfg = resources.configuration
-        if (cfg.hardKeyboardHidden == Configuration.HARDKEYBOARDHIDDEN_NO) return true
-        return cfg.keyboard != Configuration.KEYBOARD_NOKEYS
+        val present = cfg.hardKeyboardHidden == Configuration.HARDKEYBOARDHIDDEN_NO
+        if (present) {
+            Log.i(TAG, "hw keyboard via config hardKeyboardHidden=NO")
+        }
+        return present
+    }
+
+    /** Show the system soft keyboard on the current focus (or decor view). */
+    private fun showSoftInput(): Boolean {
+        return try {
+            val imm = getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager
+            val focus = currentFocus ?: window?.decorView ?: return false
+            focus.requestFocus()
+            imm.showSoftInput(focus, InputMethodManager.SHOW_IMPLICIT)
+        } catch (e: Exception) {
+            Log.w(TAG, "showSoftInput failed: $e")
+            false
+        }
     }
 
     private fun requestNotifications(): Boolean {
@@ -286,6 +343,27 @@ class MainActivity : FlutterActivity() {
             return true
         }
         return super.onKeyUp(keyCode, event)
+    }
+
+
+    /** READ_EXTERNAL_STORAGE for browsing shared folders on API ≤32. */
+    private fun hasReadStorage(): Boolean {
+        if (Build.VERSION.SDK_INT >= 33) return true // scoped; app dir / SAF
+        return ContextCompat.checkSelfPermission(
+            this,
+            Manifest.permission.READ_EXTERNAL_STORAGE,
+        ) == PackageManager.PERMISSION_GRANTED
+    }
+
+    private fun requestReadStorage(): Boolean {
+        if (Build.VERSION.SDK_INT >= 33) return true
+        if (hasReadStorage()) return true
+        ActivityCompat.requestPermissions(
+            this,
+            arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE),
+            4402,
+        )
+        return false
     }
 
     companion object {

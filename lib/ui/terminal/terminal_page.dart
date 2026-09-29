@@ -42,6 +42,8 @@ class _TerminalPageState extends ConsumerState<TerminalPage>
   ActiveTerminalKeyboard? _keyboard;
   bool _handlerRegistered = false;
   bool _hwKeyboard = false;
+  /// User override: force soft IME even when HW keyboard is (mis)detected.
+  bool _forceSoftIme = false;
   Size? _lastViewSize;
 
   @override
@@ -110,6 +112,32 @@ class _TerminalPageState extends ConsumerState<TerminalPage>
     final hw = await ime.hasHardwareKeyboard();
     if (mounted && hw != _hwKeyboard) {
       setState(() => _hwKeyboard = hw);
+    }
+  }
+
+
+  /// Soft IME should attach when no real HW kb, or user forced it on.
+  bool get _useSoftIme => !_hwKeyboard || _forceSoftIme;
+
+  /// ExtraKeys hide only when HW kb present AND user has not forced soft IME.
+  bool get _hideExtraKeys => _hwKeyboard && !_forceSoftIme;
+
+  Future<void> _toggleSoftKeyboard() async {
+    setState(() => _forceSoftIme = !_forceSoftIme);
+    if (_forceSoftIme) {
+      await _summonSoftIme();
+    }
+  }
+
+  Future<void> _summonSoftIme() async {
+    if (!_terminalFocus.canRequestFocus) return;
+    _terminalFocus.requestFocus();
+    // Give Flutter a frame to attach TextInput before asking IMM.
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    if (!mounted) return;
+    await ref.read(imeControllerProvider).showSoftInput();
+    if (mounted && !_terminalFocus.hasFocus) {
+      _terminalFocus.requestFocus();
     }
   }
 
@@ -242,17 +270,37 @@ class _TerminalPageState extends ConsumerState<TerminalPage>
                   onPressed: _disconnectActive,
                 ),
               ],
+              IconButton(
+                tooltip: _forceSoftIme || !_hwKeyboard ? '软键盘' : '唤起软键盘',
+                icon: Icon(
+                  _useSoftIme ? Icons.keyboard_alt : Icons.keyboard_alt_outlined,
+                  size: 20,
+                  color: _forceSoftIme
+                      ? Theme.of(context).colorScheme.primary
+                      : null,
+                ),
+                constraints: const BoxConstraints(
+                  minWidth: PadBreakpoints.minTap,
+                  minHeight: PadBreakpoints.minTap,
+                ),
+                onPressed: _toggleSoftKeyboard,
+              ),
               PopupMenuButton<String>(
                 tooltip: '更多',
                 onSelected: (v) async {
                   if (v == 'all') await _disconnectAll();
                   if (v == 'ime') await _clearImeComposition();
                   if (v == 'files') await _openFiles();
+                  if (v == 'kbd') await _toggleSoftKeyboard();
                 },
-                itemBuilder: (_) => const [
-                  PopupMenuItem(value: 'files', child: Text('打开文件 (SFTP)')),
-                  PopupMenuItem(value: 'ime', child: Text('清除输入法组字')),
-                  PopupMenuItem(value: 'all', child: Text('断开全部会话')),
+                itemBuilder: (_) => [
+                  const PopupMenuItem(value: 'files', child: Text('打开文件 (SFTP)')),
+                  PopupMenuItem(
+                    value: 'kbd',
+                    child: Text(_forceSoftIme ? '关闭软键盘强制' : '键盘（软键盘）'),
+                  ),
+                  const PopupMenuItem(value: 'ime', child: Text('清除输入法组字')),
+                  const PopupMenuItem(value: 'all', child: Text('断开全部会话')),
                 ],
               ),
             ],
@@ -315,14 +363,16 @@ class _TerminalPageState extends ConsumerState<TerminalPage>
                     padding: const EdgeInsets.fromLTRB(6, 4, 6, 4),
                     keyboardType: kTerminalKeyboardType,
                     deleteDetection: true,
-                    hardwareKeyboardOnly: _hwKeyboard,
+                    hardwareKeyboardOnly: !_useSoftIme,
                   ),
                 ),
               ),
               ExtraKeysBar(
                 terminal: active.terminal,
                 session: active,
-                hideForHardwareKeyboard: _hwKeyboard,
+                hideForHardwareKeyboard: _hideExtraKeys,
+                onToggleSoftKeyboard: _toggleSoftKeyboard,
+                softKeyboardForced: _forceSoftIme,
               ),
             ],
           );
@@ -348,16 +398,31 @@ class _TerminalPageState extends ConsumerState<TerminalPage>
               icon: const Icon(Icons.link_off),
               onPressed: _disconnectActive,
             ),
+          IconButton(
+            tooltip: _forceSoftIme || !_hwKeyboard ? '软键盘' : '唤起软键盘',
+            icon: Icon(
+              _useSoftIme ? Icons.keyboard_alt : Icons.keyboard_alt_outlined,
+              color: _forceSoftIme
+                  ? Theme.of(context).colorScheme.primary
+                  : null,
+            ),
+            onPressed: _toggleSoftKeyboard,
+          ),
           PopupMenuButton<String>(
             onSelected: (v) async {
               if (v == 'all') await _disconnectAll();
               if (v == 'ime') await _clearImeComposition();
               if (v == 'files') await _openFiles();
+              if (v == 'kbd') await _toggleSoftKeyboard();
             },
-            itemBuilder: (_) => const [
-              PopupMenuItem(value: 'files', child: Text('打开文件 (SFTP)')),
-              PopupMenuItem(value: 'ime', child: Text('清除输入法组字')),
-              PopupMenuItem(value: 'all', child: Text('断开全部会话')),
+            itemBuilder: (_) => [
+              const PopupMenuItem(value: 'files', child: Text('打开文件 (SFTP)')),
+              PopupMenuItem(
+                value: 'kbd',
+                child: Text(_forceSoftIme ? '关闭软键盘强制' : '键盘（软键盘）'),
+              ),
+              const PopupMenuItem(value: 'ime', child: Text('清除输入法组字')),
+              const PopupMenuItem(value: 'all', child: Text('断开全部会话')),
             ],
           ),
         ],

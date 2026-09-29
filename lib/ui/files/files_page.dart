@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path_provider/path_provider.dart';
 
@@ -12,6 +13,7 @@ import '../../core/session/session_log.dart';
 import '../../core/session/session_manager.dart';
 import '../../data/host_profile.dart';
 import '../pad/pad_breakpoints.dart';
+import 'local_fs_listing.dart';
 
 /// Dual-pane local + remote file browser (SFTP / FTP).
 ///
@@ -27,19 +29,7 @@ class FilesPage extends ConsumerStatefulWidget {
   ConsumerState<FilesPage> createState() => _FilesPageState();
 }
 
-class _LocalEntry {
-  const _LocalEntry({
-    required this.name,
-    required this.path,
-    required this.isDirectory,
-    this.size,
-  });
-
-  final String name;
-  final String path;
-  final bool isDirectory;
-  final int? size;
-}
+typedef _LocalEntry = LocalFsEntry;
 
 class _FilesPageState extends ConsumerState<FilesPage> {
   List<RemoteFileEntry> _remote = [];
@@ -144,35 +134,7 @@ class _FilesPageState extends ConsumerState<FilesPage> {
       _localError = null;
     });
     try {
-      final dir = Directory(_localPath);
-      if (!await dir.exists()) {
-        await dir.create(recursive: true);
-      }
-      final entities = await dir.list().toList();
-      final entries = <_LocalEntry>[];
-      for (final e in entities) {
-        final name = e.path.split(Platform.pathSeparator).last;
-        if (name.startsWith('.')) continue;
-        if (e is Directory) {
-          entries.add(_LocalEntry(name: name, path: e.path, isDirectory: true));
-        } else if (e is File) {
-          final len = await e.length();
-          entries.add(
-            _LocalEntry(
-              name: name,
-              path: e.path,
-              isDirectory: false,
-              size: len,
-            ),
-          );
-        }
-      }
-      entries.sort((a, b) {
-        if (a.isDirectory != b.isDirectory) {
-          return a.isDirectory ? -1 : 1;
-        }
-        return a.name.toLowerCase().compareTo(b.name.toLowerCase());
-      });
+      final entries = await listLocalDirectory(_localPath);
       if (!mounted) return;
       setState(() {
         _local = entries;
@@ -188,10 +150,42 @@ class _FilesPageState extends ConsumerState<FilesPage> {
   }
 
   Future<void> _pickLocalFolder() async {
+    if (Platform.isAndroid) {
+      final ok = await _ensureLocalStorageAccess();
+      if (!ok && mounted) {
+        _snack('若本地文件不显示，请使用应用 SSHPad 目录，或系统选取上传');
+      }
+    }
     final path = await FilePicker.platform.getDirectoryPath();
     if (path == null) return;
     setState(() => _localPath = path);
     await _reloadLocal();
+    if (!mounted) return;
+    // After listing: if we only see directories and zero files under a
+    // non-app path, remind about scoped storage (API 33+).
+    final files = _local.where((e) => !e.isDirectory).length;
+    final dirs = _local.where((e) => e.isDirectory).length;
+    if (Platform.isAndroid &&
+        files == 0 &&
+        dirs > 0 &&
+        !_localPath.contains('${Platform.pathSeparator}SSHPad')) {
+      _snack('当前文件夹可能受系统权限限制：请用应用内 SSHPad 目录，或点上传用系统选取器');
+    }
+  }
+
+  /// Best-effort READ_EXTERNAL_STORAGE on API ≤32. On 33+ returns true
+  /// (scoped storage; app SSHPad dir / SAF picker remain the reliable paths).
+  Future<bool> _ensureLocalStorageAccess() async {
+    if (!Platform.isAndroid) return true;
+    try {
+      const ch = MethodChannel('com.sshtab.ssh_pad_flutter/storage');
+      final v = await ch.invokeMethod<bool>('requestReadStorage');
+      return v ?? true;
+    } on MissingPluginException {
+      return true;
+    } catch (_) {
+      return true;
+    }
   }
 
   Future<void> _mkdirRemote() async {

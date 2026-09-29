@@ -4,7 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-/// Android IME helpers: restartInput (clear composition) + hardware keyboard detect.
+/// Android IME helpers: restartInput, show soft keyboard, hardware detect.
 class ImeController {
   ImeController();
 
@@ -22,7 +22,25 @@ class ImeController {
     }
   }
 
-  /// True when a physical / Bluetooth keyboard is attached (Android config).
+  /// Ask Android to show the system soft keyboard on the focused view.
+  Future<bool> showSoftInput() async {
+    if (!Platform.isAndroid) return false;
+    try {
+      final v = await _channel.invokeMethod<bool>('showSoftInput');
+      return v ?? false;
+    } on MissingPluginException {
+      return false;
+    } catch (e) {
+      debugPrint('ImeController.showSoftInput: $e');
+      return false;
+    }
+  }
+
+  /// True when a real physical / Bluetooth full keyboard is attached.
+  ///
+  /// Android side enumerates InputDevices (non-virtual SOURCE_KEYBOARD with
+  /// KEYBOARD_TYPE_ALPHABETIC). Configuration.keyboard alone is unreliable on
+  /// OnePlus/ColorOS tablets (often QWERTY with no BT keyboard).
   Future<bool> hasHardwareKeyboard() async {
     if (!Platform.isAndroid) {
       // Desktop / sim: treat as hardware keyboard present for ExtraKeys hide tests.
