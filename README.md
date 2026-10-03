@@ -53,7 +53,8 @@ Pad 优先的 Flutter SSH / Telnet / SFTP / FTP 终端客户端。
 10. **v0.5.6** — Esc / 硬件键盘打磨版（overlay 优先、Ctrl+[、分栏无焦点）
 11. **v0.5.7** — OEM Esc→BACK 重映射修复（OnePlus Pad Ace 2 Pro / ColorOS；scanCode 1/158）
 12. **v0.5.8** — 软键盘可唤起 + 本地文件列表修复
-13. **v0.5.9** — 终端顶栏紧凑化（状态+标签合并单行） ← 当前
+13. **v0.5.9** — 终端顶栏紧凑化（状态+标签合并单行）
+14. **v0.5.10** — 本地 Download/SAF 可见文件 + 终端选区复制粘贴 ← 当前
 
 ## Pad 布局与键盘（M3）
 
@@ -111,9 +112,9 @@ flutter run   # 需连接设备 / 模拟器
 
 - **TOFU 主机密钥**：SSH/SFTP 首次连接展示指纹并写入信任库；指纹变更时警告，可拒绝或替换。
 - **安全密钥存储**：密码 / 私钥 / 口令经 `flutter_secure_storage` 保存；SharedPreferences 仅存主机元数据；启动时迁移旧明文。
-- **双栏文件浏览器**：宽屏（≥600dp）左本地 / 右远程，支持上传、下载、远程 mkdir/删除；窄屏可切换显示本地栏。本地栏用 `stat`/`FileSystemEntity.type` 列举（不再依赖 `e is File`，避免 Android 上只见文件夹不见文件）；默认根目录为应用 `SSHPad` 文件夹；API≤32 可请求 `READ_EXTERNAL_STORAGE`；Android 13+ 受限路径请用应用目录或系统选取上传。
+- **双栏文件浏览器**：宽屏（≥600dp）左本地 / 右远程，支持上传、下载、远程 mkdir/删除；窄屏可切换显示本地栏。应用私有目录仍用 dart:io。公共 `Download` / `Downloads`（含子目录）在 API 29+ 合并 **MediaStore.Downloads**（以及 Files/图片音视频）列出 apk/pdf/图片，上传经 content Uri 读取。点「选择文件夹」走 SAF `ACTION_OPEN_DOCUMENT_TREE`（可持久读权限），用 DocumentFile 列出真实文件。不依赖「所有文件访问」。
 - **会话日志**：设置页可查看近期连接 / 密钥 / 文件操作事件。
-- **安装**：从 [GitHub Releases](https://github.com/Ghostpanter/ssh-pad-flutter/releases) 下载 APK（`v0.5.9`）。
+- **安装**：从 [GitHub Releases](https://github.com/Ghostpanter/ssh-pad-flutter/releases) 下载 APK（`v0.5.10`）。
 
 ### 自行签名发版
 
@@ -147,12 +148,23 @@ flutter build apk --release
 3. 接上真·蓝牙键盘：ExtraKeys 全键条可收起，但底部仍有「键盘」开关；点「键盘」可强制唤起软 IME（不依赖误检）。
 4. 一加 Pad Ace 2 Pro / ColorOS：即使系统误报有硬件键盘，点「键盘」仍必须能弹出软键盘。
 
-## 本地文件自测（v0.5.8）
+## 本地 Download 与选区（v0.5.10）
 
-1. 打开 SFTP/FTP 文件页：左栏本地默认在应用 `SSHPad` 目录。
-2. 向该目录放入测试文件（或从远程下载一个文件）→ **刷新后应同时看到文件夹与文件**；文件行有上传按钮。
-3. 进入子文件夹再返回：文件仍正常列出（不再「只能进目录、看不见文件」）。
-4. 点「选择文件夹」浏览到 Downloads 等共享路径：API≤32 会请求存储权限；若 Android 13+ 仍只见目录，按提示改用应用 SSHPad 目录或远程栏「上传（选取文件）」系统选取器。
+公共 Download 在分区存储下 dart:io 只能看到子目录。列表会合并 MediaStore；「选择文件夹」使用 SAF 持久授权。终端用 xterm 选区：触控板/鼠标拖选，手指长按或横向拖选，复制进系统剪贴板，粘贴经 PTY 发送。
+
+## 本地文件自测（v0.5.10）
+
+1. 打开 SFTP 文件页：左栏默认在应用 `SSHPad` 目录，自己放的文件应列出并可上传。
+2. 点「上级」到 `/storage/emulated/0/Download`：除子文件夹外，应看到 apk / pdf / 图片等文件和大小、上传按钮。
+3. 若仍只有文件夹：点「选择文件夹」，在系统界面选 Download 并允许访问。返回后文件应出现，点上传能传到远程。
+4. 进入子文件夹（如 QuarkDownloads）再返回，文件仍在。
+
+## 终端选区自测（v0.5.10）
+
+1. SSH 里执行 `echo hello-from-pad`。手指长按该行：应出现高亮和「复制」。点复制后到别处粘贴应是该文本。
+2. 外接键盘触控板按住拖过几个字符：应出现选区；右键可选「复制」。
+3. 复制一段文字后点顶栏粘贴图标或菜单「粘贴」或 Ctrl+V：文本进入终端（PTY），而不是弹出输入框。
+4. Ctrl+C 仍中断前台进程，不要变成复制。Esc 行为与 0.5.7 相同。
 
 ## 硬件 Esc 自测清单（v0.5.7 / OEM 重映射）
 

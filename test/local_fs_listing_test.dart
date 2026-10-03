@@ -62,4 +62,70 @@ void main() {
     final entries = await listLocalDirectory(tmp.path);
     expect(entries, isEmpty);
   });
+
+  test('public Download path and relative folder', () {
+    expect(
+      isPublicDownloadPath('/storage/emulated/0/Download'),
+      isTrue,
+    );
+    expect(downloadRelativePath('/storage/emulated/0/Download'), 'Download/');
+    expect(
+      downloadRelativePath('/storage/emulated/0/Download/QuarkDownloads'),
+      'Download/QuarkDownloads/',
+    );
+    expect(
+      downloadRelativePath('/storage/emulated/0/Downloads'),
+      'Downloads/',
+    );
+    expect(isPublicDownloadPath('/data/user/0/com.sshtab/files/SSHPad'), isFalse);
+    expect(downloadRelativePath('/data/user/0/com.sshtab/files/SSHPad'), isNull);
+  });
+
+  test('mergeLocalEntries adds MediaStore files and keeps dirs', () {
+    final io = [
+      const LocalFsEntry(name: 'Browser', path: '/d/Browser', isDirectory: true),
+      const LocalFsEntry(
+        name: 'owned.txt',
+        path: '/d/owned.txt',
+        isDirectory: false,
+        size: 3,
+      ),
+    ];
+    final media = [
+      const LocalFsEntry(
+        name: 'owned.txt',
+        path: '/d/owned.txt',
+        isDirectory: false,
+        size: 3,
+        contentUri: 'content://media/1',
+      ),
+      const LocalFsEntry(
+        name: 'app.apk',
+        path: '/d/app.apk',
+        isDirectory: false,
+        size: 100,
+        contentUri: 'content://media/2',
+      ),
+      const LocalFsEntry(
+        name: 'Browser',
+        path: '/d/Browser',
+        isDirectory: false,
+        contentUri: 'content://media/3',
+      ),
+      const LocalFsEntry(name: '.hidden', path: '/d/.hidden', isDirectory: false),
+    ];
+    final merged = mergeLocalEntries(io, media);
+    final names = merged.map((e) => e.name).toList();
+    expect(names.first, 'Browser');
+    expect(merged.first.isDirectory, isTrue);
+    expect(names, contains('app.apk'));
+    expect(names, contains('owned.txt'));
+    expect(names, isNot(contains('.hidden')));
+    final owned = merged.firstWhere((e) => e.name == 'owned.txt');
+    expect(owned.contentUri, 'content://media/1');
+    expect(owned.path, '/d/owned.txt');
+    final apk = merged.firstWhere((e) => e.name == 'app.apk');
+    expect(apk.contentUri, 'content://media/2');
+    expect(apk.size, 100);
+  });
 }

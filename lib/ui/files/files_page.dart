@@ -14,6 +14,7 @@ import '../../core/session/session_manager.dart';
 import '../../data/host_profile.dart';
 import '../pad/pad_breakpoints.dart';
 import 'local_fs_listing.dart';
+import 'local_storage_channel.dart';
 
 /// Dual-pane local + remote file browser (SFTP / FTP).
 ///
@@ -41,6 +42,11 @@ class _FilesPageState extends ConsumerState<FilesPage> {
   bool _busy = false;
   String _localPath = '';
   bool _showLocalNarrow = false;
+  String? _safTreeUri;
+  String _safRootName = '';
+  final List<_SafCrumb> _safCrumbs = [];
+  final LocalStorageChannel _storage = const LocalStorageChannel();
+  String? _scopedHintFor;
 
   FileBrowserSession? get _session {
     final mgr = ref.read(sessionManagerProvider);
@@ -128,13 +134,57 @@ class _FilesPageState extends ConsumerState<FilesPage> {
   }
 
   Future<void> _reloadLocal() async {
+    if (_safTreeUri != null) {
+      await _reloadSaf();
+      return;
+    }
     if (_localPath.isEmpty) return;
     setState(() {
       _loadingLocal = true;
       _localError = null;
     });
     try {
-      final entries = await listLocalDirectory(_localPath);
+      final ioEntries = await listLocalDirectory(_localPath);
+      var entries = ioEntries;
+      if (Platform.isAndroid && isPublicDownloadPath(_localPath)) {
+        await _ensureLocalStorageAccess();
+        final media = await _storage.listDownloadFiles(_localPath);
+        entries = mergeLocalEntries(ioEntries, media);
+      }
+      if (!mounted) return;
+      setState(() {
+        _local = entries;
+        _loadingLocal = false;
+      });
+      _maybeHintScopedDownload(entries);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _localError = e.toString();
+        _loadingLocal = false;
+      });
+    }
+  }
+
+  Future<void> _reloadSaf() async {
+    final tree = _safTreeUri;
+    if (tree == null) return;
+    setState(() {
+      _loadingLocal = true;
+      _localError = null;
+    });
+    try {
+      final parent = _safCrumbs.isEmpty ? null : _safCrumbs.last.documentUri;
+      final entries = await _storage.listSafChildren(
+        treeUri: tree,
+        documentUri: parent,
+      );
+      entries.sort((a, b) {
+        if (a.isDirectory != b.isDirectory) {
+          return a.isDirectory ? -1 : 1;
+        }
+        return a.name.toLowerCase().compareTo(b.name.toLowerCase());
+      });
       if (!mounted) return;
       setState(() {
         _local = entries;
@@ -149,28 +199,42 @@ class _FilesPageState extends ConsumerState<FilesPage> {
     }
   }
 
+  void _maybeHintScopedDownload(List<_LocalEntry> entries) {
+    if (!Platform.isAndroid || _safTreeUri != null) return;
+    if (!isPublicDownloadPath(_localPath)) return;
+    if (entries.any((e) => !e.isDirectory)) return;
+    if (_scopedHintFor == _localPath) return;
+    _scopedHintFor = _localPath;
+    _snack('此目录受分区存储限制，文件未列出。请点「选择文件夹」授权 Download');
+  }
+
   Future<void> _pickLocalFolder() async {
     if (Platform.isAndroid) {
-      final ok = await _ensureLocalStorageAccess();
-      if (!ok && mounted) {
-        _snack('若本地文件不显示，请使用应用 SSHPad 目录，或系统选取上传');
+      await _ensureLocalStorageAccess();
+      try {
+        final grant = await _storage.openDocumentTree();
+        if (grant == null || !mounted) return;
+        setState(() {
+          _safTreeUri = grant.treeUri;
+          _safRootName = grant.name;
+          _safCrumbs.clear();
+          _localPath = grant.displayPath;
+          _scopedHintFor = null;
+        });
+        await _reloadLocal();
+      } on PlatformException catch (e) {
+        if (mounted) _snack('无法打开系统文件夹选择：${e.message ?? e.code}');
       }
+      return;
     }
     final path = await FilePicker.platform.getDirectoryPath();
     if (path == null) return;
-    setState(() => _localPath = path);
+    setState(() {
+      _safTreeUri = null;
+      _safCrumbs.clear();
+      _localPath = path;
+    });
     await _reloadLocal();
-    if (!mounted) return;
-    // After listing: if we only see directories and zero files under a
-    // non-app path, remind about scoped storage (API 33+).
-    final files = _local.where((e) => !e.isDirectory).length;
-    final dirs = _local.where((e) => e.isDirectory).length;
-    if (Platform.isAndroid &&
-        files == 0 &&
-        dirs > 0 &&
-        !_localPath.contains('${Platform.pathSeparator}SSHPad')) {
-      _snack('当前文件夹可能受系统权限限制：请用应用内 SSHPad 目录，或点上传用系统选取器');
-    }
   }
 
   /// Best-effort READ_EXTERNAL_STORAGE on API ≤32. On 33+ returns true
@@ -215,7 +279,7 @@ class _FilesPageState extends ConsumerState<FilesPage> {
       return;
     }
     await _run(() async {
-      final bytes = await File(entry.path).readAsBytes();
+      final bytes = await _readLocalBytes(entry);
       await _session!.backend.upload(entry.name, bytes);
       sessionLog.add('Uploaded ${entry.name} → remote');
     });
@@ -228,10 +292,9 @@ class _FilesPageState extends ConsumerState<FilesPage> {
     }
     await _run(() async {
       final bytes = await _session!.backend.download(entry.name);
-      final out = File('$_localPath/${entry.name}');
-      await out.writeAsBytes(bytes, flush: true);
-      sessionLog.add('Downloaded ${entry.name} → ${out.path}');
-      if (mounted) _snack('已保存到 ${out.path}');
+      final saved = await _writeLocalFile(entry.name, bytes);
+      sessionLog.add('Downloaded ${entry.name} → $saved');
+      if (mounted) _snack('已保存到 $saved');
       await _reloadLocal();
     });
   }
@@ -266,12 +329,90 @@ class _FilesPageState extends ConsumerState<FilesPage> {
     await _run(() => _session!.backend.changeDirectory('..'));
   }
 
+  Future<Uint8List> _readLocalBytes(_LocalEntry entry) async {
+    final uri = entry.contentUri;
+    if (uri != null && uri.isNotEmpty) {
+      final cachePath = await _storage.readContentUri(uri);
+      final cache = File(cachePath);
+      try {
+        return await cache.readAsBytes();
+      } finally {
+        try {
+          await cache.delete();
+        } catch (_) {}
+      }
+    }
+    return File(entry.path).readAsBytes();
+  }
+
+  Future<String> _writeLocalFile(String name, List<int> bytes) async {
+    final tree = _safTreeUri;
+    if (tree != null) {
+      final tmp = File(
+        '${Directory.systemTemp.path}/sshpad_dl_${DateTime.now().microsecondsSinceEpoch}_$name',
+      );
+      await tmp.writeAsBytes(bytes, flush: true);
+      try {
+        await _storage.writeSafFile(
+          treeUri: tree,
+          parentDocumentUri:
+              _safCrumbs.isEmpty ? null : _safCrumbs.last.documentUri,
+          name: name,
+          sourcePath: tmp.path,
+        );
+      } finally {
+        try {
+          await tmp.delete();
+        } catch (_) {}
+      }
+      return _safDisplayPath();
+    }
+    final out = File('$_localPath/$name');
+    await out.parent.create(recursive: true);
+    await out.writeAsBytes(bytes, flush: true);
+    return out.path;
+  }
+
+  String _safDisplayPath() {
+    if (_safCrumbs.isEmpty) return _safRootName;
+    return [_safRootName, ..._safCrumbs.map((c) => c.name)].join('/');
+  }
+
   Future<void> _openLocalDir(_LocalEntry entry) async {
-    setState(() => _localPath = entry.path);
+    if (_safTreeUri != null && entry.documentUri != null) {
+      setState(() {
+        _safCrumbs.add(_SafCrumb(entry.name, entry.documentUri!));
+        _localPath = _safDisplayPath();
+      });
+      await _reloadLocal();
+      return;
+    }
+    setState(() {
+      _safTreeUri = null;
+      _safCrumbs.clear();
+      _localPath = entry.path;
+    });
     await _reloadLocal();
   }
 
   Future<void> _goUpLocal() async {
+    if (_safTreeUri != null) {
+      if (_safCrumbs.isNotEmpty) {
+        setState(() {
+          _safCrumbs.removeLast();
+          _localPath = _safDisplayPath();
+        });
+        await _reloadLocal();
+        return;
+      }
+      setState(() {
+        _safTreeUri = null;
+        _safRootName = '';
+      });
+      await _initLocalRoot();
+      await _reloadLocal();
+      return;
+    }
     final parent = Directory(_localPath).parent.path;
     if (parent.isEmpty || parent == _localPath) return;
     setState(() => _localPath = parent);
@@ -447,6 +588,20 @@ class _FilesPageState extends ConsumerState<FilesPage> {
         ),
         _pathBar(_localPath, icon: Icons.sd_storage_outlined),
         if (_loadingLocal) const LinearProgressIndicator(minHeight: 2),
+        if (!_loadingLocal &&
+            _safTreeUri == null &&
+            isPublicDownloadPath(_localPath) &&
+            !_local.any((e) => !e.isDirectory))
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 6, 12, 2),
+            child: Text(
+              '分区存储隐藏了此目录中的文件。点「选择文件夹」授权后即可看到并上传。',
+              style: TextStyle(
+                fontSize: 12,
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ),
         if (_localError != null)
           Padding(
             padding: const EdgeInsets.all(8),
@@ -761,3 +916,10 @@ Future<void> openFileBrowser(
   );
   await future;
 }
+
+class _SafCrumb {
+  const _SafCrumb(this.name, this.documentUri);
+  final String name;
+  final String documentUri;
+}
+

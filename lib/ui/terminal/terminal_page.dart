@@ -12,6 +12,7 @@ import '../widgets/session_status.dart';
 import '../keyboard/app_escape_policy.dart';
 import 'extra_keys.dart';
 import 'hardware_keyboard_handler.dart';
+import 'terminal_selection.dart';
 
 /// Soft IME style: visible-password reduces suggestions / smart punctuation.
 const kTerminalKeyboardType = TextInputType.visiblePassword;
@@ -38,6 +39,7 @@ class TerminalPage extends ConsumerStatefulWidget {
 class _TerminalPageState extends ConsumerState<TerminalPage>
     with WidgetsBindingObserver {
   final _terminalFocus = FocusNode();
+  final Map<String, TerminalController> _termControllers = {};
   ActiveTerminalKeyboard? _keyboard;
   bool _handlerRegistered = false;
   bool _hwKeyboard = false;
@@ -62,6 +64,9 @@ class _TerminalPageState extends ConsumerState<TerminalPage>
     }
     AppEscapePolicy.setTerminalSink(null);
     _terminalFocus.dispose();
+    for (final c in _termControllers.values) {
+      c.dispose();
+    }
     super.dispose();
   }
 
@@ -199,6 +204,55 @@ class _TerminalPageState extends ConsumerState<TerminalPage>
     );
   }
 
+  TerminalController _controllerFor(String id) {
+    return _termControllers.putIfAbsent(id, TerminalController.new);
+  }
+
+  Future<void> _pasteActive() async {
+    final active = ref.read(sessionManagerProvider).active;
+    if (active == null) return;
+    await pasteClipboardToTerminal(active.terminal);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('已粘贴到终端'),
+          behavior: SnackBarBehavior.floating,
+          duration: Duration(seconds: 1),
+        ),
+      );
+    }
+  }
+
+  Future<void> _copyActive() async {
+    final active = ref.read(sessionManagerProvider).active;
+    if (active == null) return;
+    final controller = _termControllers[active.id];
+    if (controller == null) return;
+    final text = selectedTerminalText(active.terminal, controller);
+    if (text == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('请先长按或拖选文字'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+      return;
+    }
+    await copyTerminalSelection(active.terminal, controller);
+    controller.clearSelection();
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('已复制'),
+          behavior: SnackBarBehavior.floating,
+          duration: Duration(seconds: 1),
+        ),
+      );
+    }
+  }
+
   static const double _chromeHeight = 38;
 
   String _phaseTooltip(TerminalSession? active) {
@@ -253,6 +307,11 @@ class _TerminalPageState extends ConsumerState<TerminalPage>
           icon: Icons.link_off,
           onPressed: _disconnectActive,
         ),
+        _chromeAction(
+          tooltip: '粘贴',
+          icon: Icons.content_paste,
+          onPressed: _pasteActive,
+        ),
       ],
       _chromeAction(
         tooltip: _forceSoftIme || !_hwKeyboard ? '软键盘' : '唤起软键盘',
@@ -276,8 +335,12 @@ class _TerminalPageState extends ConsumerState<TerminalPage>
           if (v == 'files') await _openFiles();
           if (v == 'kbd') await _toggleSoftKeyboard();
           if (v == 'disconnect' && active != null) await _disconnectActive();
+          if (v == 'copy') await _copyActive();
+          if (v == 'paste') await _pasteActive();
         },
         itemBuilder: (_) => [
+          const PopupMenuItem(value: 'copy', child: Text('复制选区')),
+          const PopupMenuItem(value: 'paste', child: Text('粘贴')),
           const PopupMenuItem(value: 'files', child: Text('打开文件 (SFTP)')),
           PopupMenuItem(
             value: 'kbd',
@@ -410,15 +473,31 @@ class _TerminalPageState extends ConsumerState<TerminalPage>
               Expanded(
                 child: ColoredBox(
                   color: const Color(0xFF0D1117),
-                  child: TerminalView(
-                    active.terminal,
+                  child: TerminalSelectionHost(
+                    terminal: active.terminal,
+                    controller: _controllerFor(active.id),
                     focusNode: _terminalFocus,
-                    autofocus: true,
-                    backgroundOpacity: 1,
-                    padding: const EdgeInsets.fromLTRB(6, 4, 6, 4),
-                    keyboardType: kTerminalKeyboardType,
-                    deleteDetection: true,
                     hardwareKeyboardOnly: !_useSoftIme,
+                    onCopied: () {
+                      if (!mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('已复制'),
+                          behavior: SnackBarBehavior.floating,
+                          duration: Duration(seconds: 1),
+                        ),
+                      );
+                    },
+                    onPasted: () {
+                      if (!mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('已粘贴到终端'),
+                          behavior: SnackBarBehavior.floating,
+                          duration: Duration(seconds: 1),
+                        ),
+                      );
+                    },
                   ),
                 ),
               ),

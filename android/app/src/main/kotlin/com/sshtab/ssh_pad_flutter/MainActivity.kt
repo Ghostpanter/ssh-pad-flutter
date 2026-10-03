@@ -28,6 +28,7 @@ class MainActivity : FlutterActivity() {
     private val imeChannelName = "com.sshtab.ssh_pad_flutter/ime"
     private val storageChannelName = "com.sshtab.ssh_pad_flutter/storage"
     private var keepaliveChannel: MethodChannel? = null
+    private val localFilesBridge by lazy { LocalFilesBridge(this) }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -111,9 +112,14 @@ class MainActivity : FlutterActivity() {
                     "hasReadStorage" -> {
                         result.success(hasReadStorage())
                     }
-                    else -> result.notImplemented()
+                    else -> localFilesBridge.handle(call, result)
                 }
             }
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        if (localFilesBridge.onActivityResult(requestCode, resultCode, data)) return
+        super.onActivityResult(requestCode, resultCode, data)
     }
 
     override fun onUserLeaveHint() {
@@ -346,17 +352,46 @@ class MainActivity : FlutterActivity() {
     }
 
 
+    private var askedMediaRead = false
+
     /** READ_EXTERNAL_STORAGE for browsing shared folders on API ≤32. */
     private fun hasReadStorage(): Boolean {
-        if (Build.VERSION.SDK_INT >= 33) return true // scoped; app dir / SAF
+        if (Build.VERSION.SDK_INT >= 33) return mediaReadGranted()
         return ContextCompat.checkSelfPermission(
             this,
             Manifest.permission.READ_EXTERNAL_STORAGE,
         ) == PackageManager.PERMISSION_GRANTED
     }
 
+    private fun mediaReadGranted(): Boolean {
+        if (Build.VERSION.SDK_INT < 33) return true
+        val perms = arrayOf(
+            Manifest.permission.READ_MEDIA_IMAGES,
+            Manifest.permission.READ_MEDIA_VIDEO,
+            Manifest.permission.READ_MEDIA_AUDIO,
+        )
+        return perms.all {
+            ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
+        }
+    }
+
     private fun requestReadStorage(): Boolean {
-        if (Build.VERSION.SDK_INT >= 33) return true
+        if (Build.VERSION.SDK_INT >= 33) {
+            if (mediaReadGranted()) return true
+            if (!askedMediaRead) {
+                askedMediaRead = true
+                ActivityCompat.requestPermissions(
+                    this,
+                    arrayOf(
+                        Manifest.permission.READ_MEDIA_IMAGES,
+                        Manifest.permission.READ_MEDIA_VIDEO,
+                        Manifest.permission.READ_MEDIA_AUDIO,
+                    ),
+                    4402,
+                )
+            }
+            return mediaReadGranted()
+        }
         if (hasReadStorage()) return true
         ActivityCompat.requestPermissions(
             this,
