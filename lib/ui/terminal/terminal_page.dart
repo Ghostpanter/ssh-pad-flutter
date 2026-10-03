@@ -8,7 +8,6 @@ import '../../core/session/session_manager.dart';
 import '../../core/session/terminal_session.dart';
 import '../../data/host_profile.dart';
 import '../files/files_page.dart';
-import '../pad/pad_breakpoints.dart';
 import '../widgets/session_status.dart';
 import '../keyboard/app_escape_policy.dart';
 import 'extra_keys.dart';
@@ -200,109 +199,165 @@ class _TerminalPageState extends ConsumerState<TerminalPage>
     );
   }
 
-  Widget _toolbar(BuildContext context, TerminalSession? active) {
+  static const double _chromeHeight = 38;
 
+  String _phaseTooltip(TerminalSession? active) {
+    if (active == null) return '未连接';
+    final base = SessionStatusStyle.label(active.phase);
+    if (active.phase == SessionPhase.connected) {
+      return '$base · 保活中';
+    }
+    return base;
+  }
+
+  Widget _chromeAction({
+    required String tooltip,
+    required IconData icon,
+    required VoidCallback? onPressed,
+    Color? color,
+  }) {
+    return IconButton(
+      tooltip: tooltip,
+      onPressed: onPressed,
+      icon: Icon(icon, size: 18, color: color),
+      visualDensity: VisualDensity.compact,
+      padding: const EdgeInsets.all(6),
+      constraints: const BoxConstraints(minWidth: 40, minHeight: 36),
+      style: IconButton.styleFrom(
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      ),
+    );
+  }
+
+  /// Compact Termius/Termux-style chrome: tabs + actions on one ~38dp row.
+  /// Status subtitle (已连接 · 保活中) moves into the status-dot tooltip.
+  Widget _compactChrome(
+    BuildContext context,
+    SessionManager mgr,
+    TerminalSession? active, {
+    bool showBack = false,
+  }) {
     final scheme = Theme.of(context).colorScheme;
     final dark = Theme.of(context).brightness == Brightness.dark;
+    final bg = dark ? const Color(0xFF161B22) : scheme.surfaceContainerHighest;
+
+    final actions = <Widget>[
+      if (active != null) ...[
+        _chromeAction(
+          tooltip: '打开文件 (SFTP)',
+          icon: Icons.folder_open_outlined,
+          onPressed: _openFiles,
+        ),
+        _chromeAction(
+          tooltip: '断开当前',
+          icon: Icons.link_off,
+          onPressed: _disconnectActive,
+        ),
+      ],
+      _chromeAction(
+        tooltip: _forceSoftIme || !_hwKeyboard ? '软键盘' : '唤起软键盘',
+        icon: _useSoftIme ? Icons.keyboard_alt : Icons.keyboard_alt_outlined,
+        color: _forceSoftIme ? scheme.primary : null,
+        onPressed: _toggleSoftKeyboard,
+      ),
+      PopupMenuButton<String>(
+        tooltip: '更多',
+        padding: EdgeInsets.zero,
+        style: IconButton.styleFrom(
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          minimumSize: const Size(40, 36),
+          padding: const EdgeInsets.all(6),
+          visualDensity: VisualDensity.compact,
+        ),
+        icon: const Icon(Icons.more_vert, size: 18),
+        onSelected: (v) async {
+          if (v == 'all') await _disconnectAll();
+          if (v == 'ime') await _clearImeComposition();
+          if (v == 'files') await _openFiles();
+          if (v == 'kbd') await _toggleSoftKeyboard();
+          if (v == 'disconnect' && active != null) await _disconnectActive();
+        },
+        itemBuilder: (_) => [
+          const PopupMenuItem(value: 'files', child: Text('打开文件 (SFTP)')),
+          PopupMenuItem(
+            value: 'kbd',
+            child: Text(_forceSoftIme ? '关闭软键盘强制' : '键盘（软键盘）'),
+          ),
+          if (active != null)
+            const PopupMenuItem(value: 'disconnect', child: Text('断开当前')),
+          const PopupMenuItem(value: 'ime', child: Text('清除输入法组字')),
+          const PopupMenuItem(value: 'all', child: Text('断开全部会话')),
+        ],
+      ),
+    ];
+
+    final Widget leading;
+    if (mgr.sessions.isNotEmpty) {
+      leading = Expanded(
+        child: _SessionTabBar(
+          manager: mgr,
+          height: _chromeHeight,
+          embedded: true,
+        ),
+      );
+    } else {
+      leading = Expanded(
+        child: Row(
+          children: [
+            if (active != null) ...[
+              Tooltip(
+                message: _phaseTooltip(active),
+                child: StatusDot(phase: active.phase, size: 8),
+              ),
+              const SizedBox(width: 8),
+            ],
+            Flexible(
+              child: Text(
+                active?.title ?? '终端',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w700,
+                      fontSize: 13,
+                      height: 1.1,
+                    ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
     return Material(
-      color: dark ? const Color(0xFF161B22) : scheme.surfaceContainerHighest,
+      color: bg,
       child: SafeArea(
         bottom: false,
+        // Parent PadShell narrow layout already consumes top inset; nested
+        // SafeArea then sees 0 and does not double-pad. Split mode relies on
+        // this single top inset for the terminal pane.
         child: Container(
-          height: PadBreakpoints.minTap,
+          height: _chromeHeight,
           decoration: BoxDecoration(
             border: Border(
-              bottom: BorderSide(color: scheme.outline.withValues(alpha: 0.55)),
+              bottom: BorderSide(color: scheme.outline.withValues(alpha: 0.45)),
             ),
           ),
           child: Row(
             children: [
-              const SizedBox(width: 10),
-              if (active != null) ...[
-                StatusDot(phase: active.phase, size: 8),
-                const SizedBox(width: 8),
-              ],
-              Expanded(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      active?.title ?? '终端',
-                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                            fontWeight: FontWeight.w700,
-                          ),
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    if (active != null)
-                      Text(
-                        SessionStatusStyle.label(active.phase) +
-                            (active.phase == SessionPhase.connected
-                                ? ' · 保活中'
-                                : ''),
-                        style: TextStyle(
-                          fontSize: 10,
-                          height: 1.1,
-                          color: SessionStatusStyle.color(active.phase),
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-              if (active != null) ...[
+              if (showBack)
                 IconButton(
-                  tooltip: '打开文件 (SFTP)',
-                  icon: const Icon(Icons.folder_open_outlined, size: 20),
-                  constraints: const BoxConstraints(
-                    minWidth: PadBreakpoints.minTap,
-                    minHeight: PadBreakpoints.minTap,
-                  ),
-                  onPressed: _openFiles,
-                ),
-                IconButton(
-                  tooltip: '断开当前',
-                  icon: const Icon(Icons.link_off, size: 20),
-                  constraints: const BoxConstraints(
-                    minWidth: PadBreakpoints.minTap,
-                    minHeight: PadBreakpoints.minTap,
-                  ),
-                  onPressed: _disconnectActive,
-                ),
-              ],
-              IconButton(
-                tooltip: _forceSoftIme || !_hwKeyboard ? '软键盘' : '唤起软键盘',
-                icon: Icon(
-                  _useSoftIme ? Icons.keyboard_alt : Icons.keyboard_alt_outlined,
-                  size: 20,
-                  color: _forceSoftIme
-                      ? Theme.of(context).colorScheme.primary
-                      : null,
-                ),
-                constraints: const BoxConstraints(
-                  minWidth: PadBreakpoints.minTap,
-                  minHeight: PadBreakpoints.minTap,
-                ),
-                onPressed: _toggleSoftKeyboard,
-              ),
-              PopupMenuButton<String>(
-                tooltip: '更多',
-                onSelected: (v) async {
-                  if (v == 'all') await _disconnectAll();
-                  if (v == 'ime') await _clearImeComposition();
-                  if (v == 'files') await _openFiles();
-                  if (v == 'kbd') await _toggleSoftKeyboard();
-                },
-                itemBuilder: (_) => [
-                  const PopupMenuItem(value: 'files', child: Text('打开文件 (SFTP)')),
-                  PopupMenuItem(
-                    value: 'kbd',
-                    child: Text(_forceSoftIme ? '关闭软键盘强制' : '键盘（软键盘）'),
-                  ),
-                  const PopupMenuItem(value: 'ime', child: Text('清除输入法组字')),
-                  const PopupMenuItem(value: 'all', child: Text('断开全部会话')),
-                ],
-              ),
+                  tooltip: '返回',
+                  icon: const Icon(Icons.arrow_back, size: 18),
+                  visualDensity: VisualDensity.compact,
+                  padding: const EdgeInsets.all(6),
+                  constraints: const BoxConstraints(minWidth: 40, minHeight: 36),
+                  onPressed: () => Navigator.of(context).maybePop(),
+                )
+              else
+                const SizedBox(width: 6),
+              leading,
+              ...actions,
+              const SizedBox(width: 2),
             ],
           ),
         ),
@@ -380,152 +435,136 @@ class _TerminalPageState extends ConsumerState<TerminalPage>
     if (widget.embedded) {
       return Column(
         children: [
-          _toolbar(context, active),
-          if (mgr.sessions.isNotEmpty)
-            _SessionTabBar(manager: mgr),
+          _compactChrome(context, mgr, active),
           Expanded(child: body),
         ],
       );
     }
 
     return Scaffold(
-      appBar: AppBar(
-        title: Text(active?.title ?? '终端'),
-        actions: [
-          if (active != null)
-            IconButton(
-              tooltip: '断开当前',
-              icon: const Icon(Icons.link_off),
-              onPressed: _disconnectActive,
-            ),
-          IconButton(
-            tooltip: _forceSoftIme || !_hwKeyboard ? '软键盘' : '唤起软键盘',
-            icon: Icon(
-              _useSoftIme ? Icons.keyboard_alt : Icons.keyboard_alt_outlined,
-              color: _forceSoftIme
-                  ? Theme.of(context).colorScheme.primary
-                  : null,
-            ),
-            onPressed: _toggleSoftKeyboard,
-          ),
-          PopupMenuButton<String>(
-            onSelected: (v) async {
-              if (v == 'all') await _disconnectAll();
-              if (v == 'ime') await _clearImeComposition();
-              if (v == 'files') await _openFiles();
-              if (v == 'kbd') await _toggleSoftKeyboard();
-            },
-            itemBuilder: (_) => [
-              const PopupMenuItem(value: 'files', child: Text('打开文件 (SFTP)')),
-              PopupMenuItem(
-                value: 'kbd',
-                child: Text(_forceSoftIme ? '关闭软键盘强制' : '键盘（软键盘）'),
-              ),
-              const PopupMenuItem(value: 'ime', child: Text('清除输入法组字')),
-              const PopupMenuItem(value: 'all', child: Text('断开全部会话')),
-            ],
-          ),
+      body: Column(
+        children: [
+          _compactChrome(context, mgr, active, showBack: true),
+          Expanded(child: body),
         ],
-        bottom: mgr.sessions.isNotEmpty
-            ? PreferredSize(
-                preferredSize: const Size.fromHeight(36),
-                child: _SessionTabBar(manager: mgr),
-              )
-            : null,
       ),
-      body: body,
     );
   }
 }
 
 class _SessionTabBar extends StatelessWidget {
-  const _SessionTabBar({required this.manager});
+  const _SessionTabBar({
+    required this.manager,
+    this.height = 36,
+    this.embedded = false,
+  });
 
   final SessionManager manager;
+  final double height;
+
+  /// When true, render as an inline strip (no own background / bottom border);
+  /// parent chrome owns the bar styling.
+  final bool embedded;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final dark = Theme.of(context).brightness == Brightness.dark;
+    final list = ListView.builder(
+      scrollDirection: Axis.horizontal,
+      padding: EdgeInsets.symmetric(
+        horizontal: embedded ? 0 : 6,
+        vertical: embedded ? 4 : 4,
+      ),
+      itemCount: manager.sessions.length,
+      itemBuilder: (context, i) {
+        final s = manager.sessions[i];
+        final selected = s.id == manager.activeId;
+        final phaseTip = SessionStatusStyle.label(s.phase) +
+            (s.phase == SessionPhase.connected ? ' · 保活中' : '');
+        return Padding(
+          padding: const EdgeInsets.only(right: 4),
+          child: Material(
+            color: selected
+                ? scheme.primary.withValues(alpha: 0.16)
+                : (dark ? const Color(0xFF21262D) : scheme.surface),
+            borderRadius: BorderRadius.circular(6),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(6),
+              onTap: () => manager.setActive(s.id),
+              child: Container(
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(
+                    color: selected
+                        ? scheme.primary.withValues(alpha: 0.55)
+                        : scheme.outline.withValues(alpha: 0.4),
+                  ),
+                ),
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Tooltip(
+                      message: phaseTip,
+                      child: StatusDot(phase: s.phase, size: 6),
+                    ),
+                    const SizedBox(width: 6),
+                    ConstrainedBox(
+                      constraints: BoxConstraints(
+                        maxWidth: manager.sessions.length == 1 ? 180 : 120,
+                      ),
+                      child: Text(
+                        s.title,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight:
+                              selected ? FontWeight.w700 : FontWeight.w500,
+                          color: selected
+                              ? scheme.primary
+                              : scheme.onSurface,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 2),
+                    InkWell(
+                      onTap: () async {
+                        await manager.close(s.id);
+                        if (context.mounted &&
+                            manager.sessions.isEmpty &&
+                            Navigator.of(context).canPop()) {
+                          Navigator.of(context).maybePop();
+                        }
+                      },
+                      borderRadius: BorderRadius.circular(10),
+                      child: const Padding(
+                        padding: EdgeInsets.all(4),
+                        child: Icon(Icons.close, size: 14),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+
+    if (embedded) {
+      return SizedBox(height: height, child: list);
+    }
+
     return Container(
-      height: 36,
+      height: height,
       decoration: BoxDecoration(
         color: dark ? const Color(0xFF0D1117) : scheme.surfaceContainerHigh,
         border: Border(
           bottom: BorderSide(color: scheme.outline.withValues(alpha: 0.45)),
         ),
       ),
-      child: ListView.builder(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-        itemCount: manager.sessions.length,
-        itemBuilder: (context, i) {
-          final s = manager.sessions[i];
-          final selected = s.id == manager.activeId;
-          return Padding(
-            padding: const EdgeInsets.only(right: 4),
-            child: Material(
-              color: selected
-                  ? scheme.primary.withValues(alpha: 0.16)
-                  : (dark ? const Color(0xFF21262D) : scheme.surface),
-              borderRadius: BorderRadius.circular(6),
-              child: InkWell(
-                borderRadius: BorderRadius.circular(6),
-                onTap: () => manager.setActive(s.id),
-                child: Container(
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(6),
-                    border: Border.all(
-                      color: selected
-                          ? scheme.primary.withValues(alpha: 0.55)
-                          : scheme.outline.withValues(alpha: 0.4),
-                    ),
-                  ),
-                  padding: const EdgeInsets.symmetric(horizontal: 8),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      StatusDot(phase: s.phase, size: 6),
-                      const SizedBox(width: 6),
-                      ConstrainedBox(
-                        constraints: const BoxConstraints(maxWidth: 140),
-                        child: Text(
-                          s.title,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontWeight:
-                                selected ? FontWeight.w700 : FontWeight.w500,
-                            color: selected
-                                ? scheme.primary
-                                : scheme.onSurface,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 2),
-                      InkWell(
-                        onTap: () async {
-                          await manager.close(s.id);
-                          if (context.mounted &&
-                              manager.sessions.isEmpty &&
-                              Navigator.of(context).canPop()) {
-                            Navigator.of(context).maybePop();
-                          }
-                        },
-                        borderRadius: BorderRadius.circular(10),
-                        child: const Padding(
-                          padding: EdgeInsets.all(4),
-                          child: Icon(Icons.close, size: 14),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          );
-        },
-      ),
+      child: list,
     );
   }
 }

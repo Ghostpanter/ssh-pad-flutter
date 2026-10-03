@@ -52,13 +52,15 @@ Pad 优先的 Flutter SSH / Telnet / SFTP / FTP 终端客户端。
 9. **v0.5.5** — 硬件 Esc 全局策略（永不作 Back；终端发 0x1b）
 10. **v0.5.6** — Esc / 硬件键盘打磨版（overlay 优先、Ctrl+[、分栏无焦点）
 11. **v0.5.7** — OEM Esc→BACK 重映射修复（OnePlus Pad Ace 2 Pro / ColorOS；scanCode 1/158）
-12. **v0.5.8** — 软键盘可唤起 + 本地文件列表修复 ← 当前
+12. **v0.5.8** — 软键盘可唤起 + 本地文件列表修复
+13. **v0.5.9** — 终端顶栏紧凑化（状态+标签合并单行） ← 当前
 
 ## Pad 布局与键盘（M3）
 
 - **≥600dp**：左栏主机卡片 / 会话列表，中间 14dp 拖拽分割条（宽度持久化），右栏终端或文件。
 - **&lt;600dp**：`NavigationRail`（主机 / 终端 / 文件 / 设置），避免破坏手机布局。
 - **安全区**：顶栏控件最小点击热区 **48dp**；OEM 状态栏 inset 为 0 时保底 40dp。
+- **终端顶栏（v0.5.9）**：状态栏与会话标签合并为约 **38dp** 单行（参考 Termux / Termius / ConnectBot 紧凑 chrome）；去掉双行「已连接 · 保活中」，状态进圆点 tooltip；文件 / 键盘 / 断开 / 更多与标签同行；单会话不再重复显示主机标题。
 - **键盘**：
   - Manifest `configChanges` 已含 `keyboard|keyboardHidden|navigation`（插拔不重建 Activity）。
   - **Esc 全局策略**：整个 App 内硬件 Esc **绝不**当作 Flutter/Android Back；`DismissIntent` shortcut + action 双保险；仅可关闭 barrierDismissible 浮层（菜单优先于终端）；终端会话活跃且非文本框焦点时发 `0x1b` 到 PTY（含 Pad 分栏终端可见但未聚焦）；**Ctrl+[** → Esc（vi）；系统返回键/手势仍可导航。
@@ -111,7 +113,7 @@ flutter run   # 需连接设备 / 模拟器
 - **安全密钥存储**：密码 / 私钥 / 口令经 `flutter_secure_storage` 保存；SharedPreferences 仅存主机元数据；启动时迁移旧明文。
 - **双栏文件浏览器**：宽屏（≥600dp）左本地 / 右远程，支持上传、下载、远程 mkdir/删除；窄屏可切换显示本地栏。本地栏用 `stat`/`FileSystemEntity.type` 列举（不再依赖 `e is File`，避免 Android 上只见文件夹不见文件）；默认根目录为应用 `SSHPad` 文件夹；API≤32 可请求 `READ_EXTERNAL_STORAGE`；Android 13+ 受限路径请用应用目录或系统选取上传。
 - **会话日志**：设置页可查看近期连接 / 密钥 / 文件操作事件。
-- **安装**：从 [GitHub Releases](https://github.com/Ghostpanter/ssh-pad-flutter/releases) 下载 APK（`v0.5.8`）。
+- **安装**：从 [GitHub Releases](https://github.com/Ghostpanter/ssh-pad-flutter/releases) 下载 APK（`v0.5.9`）。
 
 ### 自行签名发版
 
