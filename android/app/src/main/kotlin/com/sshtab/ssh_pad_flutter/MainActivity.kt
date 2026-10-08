@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.net.Uri
 import android.os.Build
+import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
 import android.util.Log
@@ -30,7 +31,23 @@ class MainActivity : FlutterActivity() {
     private var keepaliveChannel: MethodChannel? = null
     private val localFilesBridge by lazy { LocalFilesBridge(this) }
 
+    /** 卓易通 detected: this Activity only hands off to ZytExitActivity. */
+    private var zytBlocked = false
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        // 卓易通 guard — decided BEFORE super.onCreate (Flutter engine setup).
+        // Result is cached from SshPadApplication; check() never throws.
+        zytBlocked = ZhuoyitongGuard.check(applicationContext).detected
+        if (zytBlocked) {
+            // finish() inside onCreate ⇒ Android skips onStart/onResume, so the
+            // Dart entrypoint never runs (no channels, FGS, MediaStore, IME…).
+            ZhuoyitongGuard.leave(this)
+        }
+        super.onCreate(savedInstanceState)
+    }
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
+        if (zytBlocked) return // no plugins / channels inside 卓易通
         super.configureFlutterEngine(flutterEngine)
         keepaliveChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, keepaliveChannelName)
         SessionForegroundService.stopCallback = {
@@ -124,6 +141,7 @@ class MainActivity : FlutterActivity() {
 
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
+        if (zytBlocked) return
         // Home / recent-apps: re-ensure FGS while still in a privileged state.
         Log.i(TAG, "onUserLeaveHint — ensure FGS")
         SessionForegroundService.ensure(this)

@@ -128,6 +128,12 @@ class SessionForegroundService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // Defense in depth: never run keepalive inside 卓易通 (e.g. sticky restart).
+        if (ZhuoyitongGuard.check(this).detected) {
+            Log.w(TAG, "Zhuoyitong — refusing to start FGS")
+            stopSelf(startId)
+            return START_NOT_STICKY
+        }
         when (intent?.action) {
             ACTION_STOP -> {
                 Log.i(TAG, "ACTION_STOP")

@@ -26,7 +26,7 @@
 
     <application
         android:label="SSH Pad"
-        android:name="${applicationName}"
+        android:name=".SshPadApplication"
         android:icon="@mipmap/ic_launcher">
         <activity
             android:name=".MainActivity"
@@ -46,6 +46,14 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+
+        <!-- 卓易通 (HarmonyOS NEXT Android container): native "unsupported" dialog,
+             then exit. Never launched on normal Android. -->
+        <activity
+            android:name=".ZytExitActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
 
         <!--
           Keepalive FGS (same process as Flutter/Dart SSH).
@@ -78,5 +86,9 @@
         <package android:name="com.vivo.permissionmanager"/>
         <package android:name="com.samsung.android.lool"/>
         <package android:name="com.samsung.android.sm"/>
+        <!-- 卓易通 host packages (weak hint for ZhuoyitongGuard only) -->
+        <package android:name="com.zhuoyi.appstore.lite"/>
+        <package android:name="com.droi.tong"/>
+        <package android:name="com.droi.iapps"/>
     </queries>
 </manifest>

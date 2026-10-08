@@ -54,7 +54,8 @@ Pad 优先的 Flutter SSH / Telnet / SFTP / FTP 终端客户端。
 11. **v0.5.7** — OEM Esc→BACK 重映射修复（OnePlus Pad Ace 2 Pro / ColorOS；scanCode 1/158）
 12. **v0.5.8** — 软键盘可唤起 + 本地文件列表修复
 13. **v0.5.9** — 终端顶栏紧凑化（状态+标签合并单行）
-14. **v0.5.10** — 本地 Download/SAF 可见文件 + 终端选区复制粘贴 ← 当前
+14. **v0.5.10** — 本地 Download/SAF 可见文件 + 终端选区复制粘贴
+15. **v0.5.11** — 卓易通环境检测后提示并退出（不做兼容） ← 当前
 
 ## Pad 布局与键盘（M3）
 
@@ -114,7 +115,8 @@ flutter run   # 需连接设备 / 模拟器
 - **安全密钥存储**：密码 / 私钥 / 口令经 `flutter_secure_storage` 保存；SharedPreferences 仅存主机元数据；启动时迁移旧明文。
 - **双栏文件浏览器**：宽屏（≥600dp）左本地 / 右远程，支持上传、下载、远程 mkdir/删除；窄屏可切换显示本地栏。应用私有目录仍用 dart:io。公共 `Download` / `Downloads`（含子目录）在 API 29+ 合并 **MediaStore.Downloads**（以及 Files/图片音视频）列出 apk/pdf/图片，上传经 content Uri 读取。点「选择文件夹」走 SAF `ACTION_OPEN_DOCUMENT_TREE`（可持久读权限），用 DocumentFile 列出真实文件。不依赖「所有文件访问」。
 - **会话日志**：设置页可查看近期连接 / 密钥 / 文件操作事件。
-- **安装**：从 [GitHub Releases](https://github.com/Ghostpanter/ssh-pad-flutter/releases) 下载 APK（`v0.5.10`）。
+- **安装**：从 [GitHub Releases](https://github.com/Ghostpanter/ssh-pad-flutter/releases) 下载 APK（`v0.5.11`）。
+- **卓易通**：在鸿蒙 NEXT 的卓易通容器中运行时，App 会检测到并提示「当前运行在卓易通环境，SSH Pad 不支持，即将退出。」后主动退出——这是设计行为，不做兼容；普通 Android（含华为/荣耀 EMUI、HarmonyOS 2–4）不受影响。检测信号：安装来源 `com.zhuoyi.appstore.lite`、`/proc/self/cgroup` 含 `isulad`/`zhuoyi`、Build 字段含 `zhuoyi`（任一即判定）；弱信号（`/lxc/`、卓易通宿主包、zyt 属性等）须再叠加华为/鸿蒙特征才判定。详见 `ZhuoyitongGuard.kt`，`adb logcat -s SshPadMain` 可看命中信号。
 
 ### 自行签名发版
 
