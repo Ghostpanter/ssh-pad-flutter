@@ -1,7 +1,7 @@
 name: ssh_pad_flutter
 description: "Pad-first Flutter SSH/Telnet/SFTP/FTP terminal (ServerBox-aligned rewrite of ssh-pad)"
 publish_to: 'none'
-version: 0.5.11+16
+version: 0.5.10+16
 
 environment:
   sdk: ^3.13.4
