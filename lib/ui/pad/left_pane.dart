@@ -157,6 +157,13 @@ class LeftPane extends ConsumerWidget {
                         onSection(PadSection.terminal);
                       },
                       onClose: () => mgr.close(s.id),
+                      onReconnect: mgr.canReconnect(s)
+                          ? () {
+                              mgr.setActive(s.id);
+                              mgr.reconnect(s.id);
+                            }
+                          : null,
+                      reconnecting: mgr.isReconnecting(s.id),
                     ),
                     const SizedBox(height: 4),
                   ],
@@ -578,8 +585,12 @@ class _SessionCard extends StatelessWidget {
     required this.selected,
     required this.onSelect,
     required this.onClose,
+    this.onReconnect,
+    this.reconnecting = false,
   });
 
+  final VoidCallback? onReconnect;
+  final bool reconnecting;
   final String title;
   final SessionPhase phase;
   final bool selected;
@@ -633,7 +644,9 @@ class _SessionCard extends StatelessWidget {
                                 ),
                               ),
                               Text(
-                                SessionStatusStyle.label(phase),
+                                reconnecting
+                                    ? '重连中'
+                                    : SessionStatusStyle.label(phase),
                                 style: TextStyle(
                                   fontSize: 10,
                                   color: SessionStatusStyle.color(phase),
@@ -643,6 +656,17 @@ class _SessionCard extends StatelessWidget {
                             ],
                           ),
                         ),
+                        if (onReconnect != null)
+                          IconButton(
+                            tooltip: '重连',
+                            icon: const Icon(Icons.refresh, size: 16),
+                            visualDensity: VisualDensity.compact,
+                            constraints: const BoxConstraints(
+                              minWidth: 36,
+                              minHeight: 40,
+                            ),
+                            onPressed: onReconnect,
+                          ),
                         IconButton(
                           tooltip: '关闭',
                           icon: const Icon(Icons.close, size: 16),

@@ -176,9 +176,18 @@ class _TerminalPageState extends ConsumerState<TerminalPage>
     final mgr = ref.read(sessionManagerProvider);
     final active = mgr.active;
     if (active == null) return;
-    await mgr.close(active.id);
-    if (mounted && mgr.sessions.isEmpty && !widget.embedded) {
-      Navigator.of(context).maybePop();
+    await mgr.disconnectSession(active.id);
+  }
+
+  Future<void> _reconnectActive() async {
+    final mgr = ref.read(sessionManagerProvider);
+    final active = mgr.active;
+    if (active == null) return;
+    final ok = await mgr.reconnect(active.id);
+    if (!ok && mounted && active.phase == SessionPhase.error) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('重连失败：${active.errorMessage ?? '未知错误'}')),
+      );
     }
   }
 
@@ -302,11 +311,18 @@ class _TerminalPageState extends ConsumerState<TerminalPage>
           icon: Icons.folder_open_outlined,
           onPressed: _openFiles,
         ),
-        _chromeAction(
-          tooltip: '断开当前',
-          icon: Icons.link_off,
-          onPressed: _disconnectActive,
-        ),
+        if (mgr.canReconnect(active) || mgr.isReconnecting(active.id))
+          _chromeAction(
+            tooltip: '重连',
+            icon: Icons.refresh,
+            onPressed: mgr.isReconnecting(active.id) ? null : _reconnectActive,
+          )
+        else
+          _chromeAction(
+            tooltip: '断开当前',
+            icon: Icons.link_off,
+            onPressed: _disconnectActive,
+          ),
         _chromeAction(
           tooltip: '粘贴',
           icon: Icons.content_paste,
@@ -335,6 +351,7 @@ class _TerminalPageState extends ConsumerState<TerminalPage>
           if (v == 'files') await _openFiles();
           if (v == 'kbd') await _toggleSoftKeyboard();
           if (v == 'disconnect' && active != null) await _disconnectActive();
+          if (v == 'reconnect' && active != null) await _reconnectActive();
           if (v == 'copy') await _copyActive();
           if (v == 'paste') await _pasteActive();
         },
@@ -346,7 +363,9 @@ class _TerminalPageState extends ConsumerState<TerminalPage>
             value: 'kbd',
             child: Text(_forceSoftIme ? '关闭软键盘强制' : '键盘（软键盘）'),
           ),
-          if (active != null)
+          if (active != null && mgr.canReconnect(active))
+            const PopupMenuItem(value: 'reconnect', child: Text('重连')),
+          if (active != null && SessionStatusStyle.isLive(active.phase))
             const PopupMenuItem(value: 'disconnect', child: Text('断开当前')),
           const PopupMenuItem(value: 'ime', child: Text('清除输入法组字')),
           const PopupMenuItem(value: 'all', child: Text('断开全部会话')),
@@ -470,6 +489,12 @@ class _TerminalPageState extends ConsumerState<TerminalPage>
           )
         : Column(
             children: [
+              if (mgr.canReconnect(active) || mgr.isReconnecting(active.id))
+                _ReconnectBanner(
+                  session: active,
+                  busy: mgr.isReconnecting(active.id),
+                  onReconnect: _reconnectActive,
+                ),
               Expanded(
                 child: ColoredBox(
                   color: const Color(0xFF0D1117),
@@ -531,6 +556,66 @@ class _TerminalPageState extends ConsumerState<TerminalPage>
   }
 }
 
+class _ReconnectBanner extends StatelessWidget {
+  const _ReconnectBanner({
+    required this.session,
+    required this.busy,
+    required this.onReconnect,
+  });
+
+  final TerminalSession session;
+  final bool busy;
+  final VoidCallback onReconnect;
+
+  @override
+  Widget build(BuildContext context) {
+    final isError = session.phase == SessionPhase.error;
+    final msg = busy
+        ? '正在重连…'
+        : isError
+            ? '连接失败：${session.errorMessage ?? '未知错误'}'
+            : '已断开';
+    return Material(
+      color: isError ? const Color(0xFF3D1F1F) : const Color(0xFF2D2A1A),
+      child: SizedBox(
+        height: 34,
+        child: Row(
+          children: [
+            const SizedBox(width: 10),
+            Icon(isError ? Icons.error_outline : Icons.link_off,
+                size: 16, color: Colors.white70),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                msg,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 12, color: Colors.white),
+              ),
+            ),
+            if (busy)
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 14),
+                child: SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              )
+            else
+              TextButton.icon(
+                onPressed: onReconnect,
+                icon: const Icon(Icons.refresh, size: 16),
+                label: const Text('重连'),
+              ),
+            const SizedBox(width: 4),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _SessionTabBar extends StatelessWidget {
   const _SessionTabBar({
     required this.manager,
@@ -544,6 +629,31 @@ class _SessionTabBar extends StatelessWidget {
   /// When true, render as an inline strip (no own background / bottom border);
   /// parent chrome owns the bar styling.
   final bool embedded;
+
+  Future<void> _showTabMenu(BuildContext context, TerminalSession s) async {
+    final box = context.findRenderObject() as RenderBox?;
+    final origin = box?.localToGlobal(Offset.zero) ?? Offset.zero;
+    final v = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromLTRB(
+          origin.dx, origin.dy + height, origin.dx + 1, origin.dy),
+      items: [
+        if (manager.canReconnect(s))
+          const PopupMenuItem(value: 'reconnect', child: Text('重连')),
+        if (SessionStatusStyle.isLive(s.phase))
+          const PopupMenuItem(value: 'disconnect', child: Text('断开')),
+        const PopupMenuItem(value: 'close', child: Text('关闭标签')),
+      ],
+    );
+    if (v == 'reconnect') {
+      manager.setActive(s.id);
+      await manager.reconnect(s.id);
+    } else if (v == 'disconnect') {
+      await manager.disconnectSession(s.id);
+    } else if (v == 'close') {
+      await manager.close(s.id);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -571,6 +681,7 @@ class _SessionTabBar extends StatelessWidget {
             child: InkWell(
               borderRadius: BorderRadius.circular(6),
               onTap: () => manager.setActive(s.id),
+              onLongPress: () => _showTabMenu(context, s),
               child: Container(
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(6),

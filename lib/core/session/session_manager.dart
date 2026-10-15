@@ -91,16 +91,7 @@ class SessionManager extends ChangeNotifier {
         ? TelnetTerminalSession(id: id, profile: hydrated)
         : SshTerminalSession(id: id, profile: hydrated, hub: sshHub);
 
-    session.onChanged = () {
-      if (!_disposed) {
-        notifyListeners();
-        _syncKeepAlive();
-      }
-    };
-    _terminals.add(session);
-    _activeTerminalId = id;
-    notifyListeners();
-    _syncKeepAlive();
+    _attach(session);
 
     try {
       await session.connect();
@@ -167,6 +158,90 @@ class SessionManager extends ChangeNotifier {
     _syncKeepAlive();
     notifyListeners();
     return session;
+  }
+
+  final Set<String> _reconnecting = {};
+
+  /// True while a manual reconnect for terminal [id] is in flight.
+  bool isReconnecting(String id) => _reconnecting.contains(id);
+
+  /// Whether terminal [s] can be manually reconnected right now.
+  bool canReconnect(TerminalSession s) =>
+      !_reconnecting.contains(s.id) &&
+      (s.phase == SessionPhase.disconnected || s.phase == SessionPhase.error);
+
+  /// Register an externally-built session (tests / restore).
+  @visibleForTesting
+  void addTerminalForTest(TerminalSession session) => _attach(session);
+
+  void _attach(TerminalSession session) {
+    session.onChanged = () {
+      if (!_disposed) {
+        notifyListeners();
+        _syncKeepAlive();
+      }
+    };
+    _terminals.add(session);
+    _activeTerminalId = session.id;
+    notifyListeners();
+    _syncKeepAlive();
+  }
+
+  /// User "断开": tear down the transport for this tab but keep the tab so it
+  /// can be reconnected later. Closing the tab (x) still uses [close].
+  Future<void> disconnectSession(String id) async {
+    final s = _find(id);
+    if (s == null) return;
+    await s.disconnect();
+    notifyListeners();
+    await _syncKeepAlive();
+  }
+
+  /// Manual reconnect: same tab, same profile, same terminal buffer.
+  /// Returns true on success. Never runs automatically.
+  Future<bool> reconnect(String id) async {
+    final s = _find(id);
+    if (s == null || !canReconnect(s)) return false;
+    _reconnecting.add(id);
+    notifyListeners();
+    try {
+      // Drop any stale channel / hub ref first (idempotent).
+      await s.disconnect(silent: true);
+      await s.connect();
+      if (_find(id) == null) return false; // closed meanwhile
+      s.terminal.write('\r\n--- 已重新连接 ---\r\n');
+      // Re-attach file browsers of this host that dropped with the transport.
+      for (final f in List<FileBrowserSession>.from(_files)) {
+        if (f.profile.id == s.profile.id &&
+            (f.phase == SessionPhase.disconnected ||
+                f.phase == SessionPhase.error)) {
+          try {
+            await f.disconnect();
+            await f.connect();
+          } catch (e) {
+            sessionLog.add('File session reconnect failed: $e',
+                level: SessionLogLevel.warn);
+          }
+        }
+      }
+      return true;
+    } catch (e) {
+      sessionLog.add('Reconnect failed: $e', level: SessionLogLevel.warn);
+      return false;
+    } finally {
+      _reconnecting.remove(id);
+      if (!_disposed) {
+        notifyListeners();
+        await _syncKeepAlive();
+      }
+    }
+  }
+
+  TerminalSession? _find(String id) {
+    for (final s in _terminals) {
+      if (s.id == id) return s;
+    }
+    return null;
   }
 
   void setActive(String id) {
