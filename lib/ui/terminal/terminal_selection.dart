@@ -1,3 +1,5 @@
+import 'dart:ui' as ui;
+
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -34,7 +36,6 @@ Map<ShortcutActivator, Intent> terminalSelectionShortcuts() {
         const PasteTextIntent(SelectionChangedCause.keyboard),
   };
 }
-
 
 /// Touch: mostly-horizontal drag selects (vertical drag keeps scrollback).
 /// Mouse / trackpad / stylus: any drag selects.
@@ -202,7 +203,8 @@ class _TerminalSelectionHostState extends State<TerminalSelectionHost> {
 
   Future<void> _onSecondary(TapUpDetails details) async {
     final box = context.findRenderObject() as RenderBox?;
-    final overlay = Overlay.of(context).context.findRenderObject() as RenderBox?;
+    final overlay =
+        Overlay.of(context).context.findRenderObject() as RenderBox?;
     if (box == null || overlay == null) {
       if (_hasSelection) {
         await _copy();
@@ -257,41 +259,48 @@ class _TerminalSelectionHostState extends State<TerminalSelectionHost> {
               gestures: <Type, GestureRecognizerFactory>{
                 LongPressGestureRecognizer:
                     GestureRecognizerFactoryWithHandlers<
-                        LongPressGestureRecognizer>(
-                  () => LongPressGestureRecognizer(
-                    debugOwner: this,
-                    duration: const Duration(milliseconds: 350),
-                    supportedDevices: kTerminalLongPressKinds,
-                  ),
-                  (LongPressGestureRecognizer instance) {
-                    instance.onLongPressStart = (details) {
-                      _selectWord(details.localPosition);
-                    };
-                    instance.onLongPressMoveUpdate = (details) {
-                      final origin = _downLocal;
-                      if (origin == null) {
-                        _selectWord(details.localPosition);
-                        return;
-                      }
-                      _selectChars(origin, details.localPosition);
-                    };
-                  },
-                ),
+                      LongPressGestureRecognizer
+                    >(
+                      () => LongPressGestureRecognizer(
+                        debugOwner: this,
+                        duration: const Duration(milliseconds: 350),
+                        supportedDevices: kTerminalLongPressKinds,
+                      ),
+                      (LongPressGestureRecognizer instance) {
+                        instance.onLongPressStart = (details) {
+                          _selectWord(details.localPosition);
+                        };
+                        instance.onLongPressMoveUpdate = (details) {
+                          final origin = _downLocal;
+                          if (origin == null) {
+                            _selectWord(details.localPosition);
+                            return;
+                          }
+                          _selectChars(origin, details.localPosition);
+                        };
+                      },
+                    ),
               },
-              child: TerminalView(
-                widget.terminal,
-                key: _viewKey,
-                controller: widget.controller,
-                focusNode: widget.focusNode,
-                autofocus: true,
-                backgroundOpacity: 1,
-                padding: const EdgeInsets.fromLTRB(6, 4, 6, 4),
-                keyboardType: TextInputType.visiblePassword,
-                deleteDetection: true,
-                hardwareKeyboardOnly: widget.hardwareKeyboardOnly,
-                shortcuts: terminalSelectionShortcuts(),
-                onSecondaryTapUp: (details, _) => _onSecondary(details),
-                onSecondaryTapDown: (_, _) {},
+              child: LayoutBuilder(
+                builder: (context, constraints) => _fittedTerminal(
+                  context,
+                  constraints,
+                  TerminalView(
+                    widget.terminal,
+                    key: _viewKey,
+                    controller: widget.controller,
+                    focusNode: widget.focusNode,
+                    autofocus: true,
+                    backgroundOpacity: 1,
+                    padding: const EdgeInsets.fromLTRB(6, 4, 6, 4),
+                    keyboardType: TextInputType.visiblePassword,
+                    deleteDetection: true,
+                    hardwareKeyboardOnly: widget.hardwareKeyboardOnly,
+                    shortcuts: terminalSelectionShortcuts(),
+                    onSecondaryTapUp: (details, _) => _onSecondary(details),
+                    onSecondaryTapDown: (_, _) {},
+                  ),
+                ),
               ),
             ),
           ),
@@ -306,14 +315,8 @@ class _TerminalSelectionHostState extends State<TerminalSelectionHost> {
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    TextButton(
-                      onPressed: _copy,
-                      child: const Text('复制'),
-                    ),
-                    TextButton(
-                      onPressed: _paste,
-                      child: const Text('粘贴'),
-                    ),
+                    TextButton(onPressed: _copy, child: const Text('复制')),
+                    TextButton(onPressed: _paste, child: const Text('粘贴')),
                     IconButton(
                       tooltip: '取消选择',
                       visualDensity: VisualDensity.compact,
@@ -330,3 +333,62 @@ class _TerminalSelectionHostState extends State<TerminalSelectionHost> {
   }
 }
 
+/// Vertical padding passed to [TerminalView] (top 4 + bottom 4).
+const double _kTermVPad = 8;
+
+/// Mirrors xterm's TerminalPainter._measureCharSize height so we can size the
+/// view to an exact multiple of rows.
+double measureTerminalCellHeight(TerminalStyle style, TextScaler scaler) {
+  final textStyle = style.toTextStyle();
+  final builder = ui.ParagraphBuilder(textStyle.getParagraphStyle());
+  builder.pushStyle(
+    textStyle
+        .copyWith(fontSize: scaler.scale(textStyle.fontSize!))
+        .getTextStyle(),
+  );
+  builder.addText('mmmmmmmmmm');
+  final p = builder.build();
+  p.layout(const ui.ParagraphConstraints(width: double.infinity));
+  final h = p.height;
+  p.dispose();
+  return h;
+}
+
+/// Clips the terminal to its slot, drops inherited MediaQuery padding (xterm
+/// applies status-bar insets internally, which is wrong for an embedded view)
+/// and gives it a height of exactly N rows so no partial line is scrolled
+/// above the top edge.
+Widget _fittedTerminal(
+  BuildContext context,
+  BoxConstraints constraints,
+  Widget terminalView,
+) {
+  Widget child = MediaQuery.removePadding(
+    context: context,
+    removeTop: true,
+    removeBottom: true,
+    removeLeft: true,
+    removeRight: true,
+    child: terminalView,
+  );
+  if (constraints.hasBoundedHeight) {
+    final cell = measureTerminalCellHeight(
+      const TerminalStyle(),
+      MediaQuery.textScalerOf(context),
+    );
+    if (cell > 0) {
+      final avail = constraints.maxHeight - _kTermVPad;
+      final rows = (avail / cell).floor().clamp(1, 1 << 16);
+      // +0.5 guards against float rounding so xterm floors to `rows`, not rows-1.
+      final h = (rows * cell + _kTermVPad + 0.5).clamp(
+        0.0,
+        constraints.maxHeight,
+      );
+      child = Align(
+        alignment: Alignment.topLeft,
+        child: SizedBox(height: h, width: constraints.maxWidth, child: child),
+      );
+    }
+  }
+  return ClipRect(child: child);
+}
