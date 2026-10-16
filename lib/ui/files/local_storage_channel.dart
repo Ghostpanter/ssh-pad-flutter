@@ -26,6 +26,37 @@ class LocalStorageChannel {
     }
   }
 
+  /// Android 11+: MANAGE_EXTERNAL_STORAGE granted (≤10: READ granted).
+  Future<bool> isAllFilesAccessGranted() async {
+    if (!Platform.isAndroid) return true;
+    try {
+      return await _ch.invokeMethod<bool>('isAllFilesAccessGranted') ?? false;
+    } on MissingPluginException {
+      return false;
+    } on PlatformException {
+      return false;
+    }
+  }
+
+  /// Opens the system "All files access" page. False if no page could open.
+  Future<bool> openAllFilesAccessSettings() async {
+    if (!Platform.isAndroid) return false;
+    try {
+      return await _ch.invokeMethod<bool>('openAllFilesAccessSettings') ??
+          false;
+    } on MissingPluginException {
+      return false;
+    }
+  }
+
+  /// System file picker (ACTION_OPEN_DOCUMENT, multi-select). Entries carry
+  /// a content Uri readable regardless of which app created the file.
+  Future<List<LocalFsEntry>> pickDocuments() async {
+    if (!Platform.isAndroid) return const [];
+    final raw = await _ch.invokeMethod<List<dynamic>>('pickDocuments');
+    return _parseList(raw);
+  }
+
   /// Persistable [ACTION_OPEN_DOCUMENT_TREE]. Null if the user cancels.
   Future<SafTreeGrant?> openDocumentTree() async {
     if (!Platform.isAndroid) return null;

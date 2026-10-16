@@ -14,20 +14,14 @@ void main() {
       isFalse,
     );
 
-    final file = classifyLocalEntityType(
-      FileSystemEntityType.file,
-      size: 42,
-    );
+    final file = classifyLocalEntityType(FileSystemEntityType.file, size: 42);
     expect(file.isDirectory, isFalse);
     expect(file.size, 42);
     expect(file.skipped, isFalse);
   });
 
   test('classifyLocalEntityType: link / notFound skipped', () {
-    expect(
-      classifyLocalEntityType(FileSystemEntityType.link).skipped,
-      isTrue,
-    );
+    expect(classifyLocalEntityType(FileSystemEntityType.link).skipped, isTrue);
     expect(
       classifyLocalEntityType(FileSystemEntityType.notFound).skipped,
       isTrue,
@@ -64,26 +58,30 @@ void main() {
   });
 
   test('public Download path and relative folder', () {
-    expect(
-      isPublicDownloadPath('/storage/emulated/0/Download'),
-      isTrue,
-    );
+    expect(isPublicDownloadPath('/storage/emulated/0/Download'), isTrue);
     expect(downloadRelativePath('/storage/emulated/0/Download'), 'Download/');
     expect(
       downloadRelativePath('/storage/emulated/0/Download/QuarkDownloads'),
       'Download/QuarkDownloads/',
     );
+    expect(downloadRelativePath('/storage/emulated/0/Downloads'), 'Downloads/');
     expect(
-      downloadRelativePath('/storage/emulated/0/Downloads'),
-      'Downloads/',
+      isPublicDownloadPath('/data/user/0/com.sshtab/files/SSHPad'),
+      isFalse,
     );
-    expect(isPublicDownloadPath('/data/user/0/com.sshtab/files/SSHPad'), isFalse);
-    expect(downloadRelativePath('/data/user/0/com.sshtab/files/SSHPad'), isNull);
+    expect(
+      downloadRelativePath('/data/user/0/com.sshtab/files/SSHPad'),
+      isNull,
+    );
   });
 
   test('mergeLocalEntries adds MediaStore files and keeps dirs', () {
     final io = [
-      const LocalFsEntry(name: 'Browser', path: '/d/Browser', isDirectory: true),
+      const LocalFsEntry(
+        name: 'Browser',
+        path: '/d/Browser',
+        isDirectory: true,
+      ),
       const LocalFsEntry(
         name: 'owned.txt',
         path: '/d/owned.txt',
@@ -112,7 +110,11 @@ void main() {
         isDirectory: false,
         contentUri: 'content://media/3',
       ),
-      const LocalFsEntry(name: '.hidden', path: '/d/.hidden', isDirectory: false),
+      const LocalFsEntry(
+        name: '.hidden',
+        path: '/d/.hidden',
+        isDirectory: false,
+      ),
     ];
     final merged = mergeLocalEntries(io, media);
     final names = merged.map((e) => e.name).toList();
@@ -127,5 +129,46 @@ void main() {
     final apk = merged.firstWhere((e) => e.name == 'app.apk');
     expect(apk.contentUri, 'content://media/2');
     expect(apk.size, 100);
+  });
+
+  group('shouldShowDownloadAccessHint', () {
+    test('shown for public Download without grant', () {
+      expect(
+        shouldShowDownloadAccessHint(
+          path: '/storage/emulated/0/Download/sub',
+          allFilesAccess: false,
+          inSafTree: false,
+        ),
+        isTrue,
+      );
+    });
+    test('hidden when all-files access granted', () {
+      expect(
+        shouldShowDownloadAccessHint(
+          path: '/storage/emulated/0/Download',
+          allFilesAccess: true,
+          inSafTree: false,
+        ),
+        isFalse,
+      );
+    });
+    test('hidden inside SAF tree or non-Download path', () {
+      expect(
+        shouldShowDownloadAccessHint(
+          path: '/storage/emulated/0/Download',
+          allFilesAccess: false,
+          inSafTree: true,
+        ),
+        isFalse,
+      );
+      expect(
+        shouldShowDownloadAccessHint(
+          path: '/data/user/0/x/files',
+          allFilesAccess: false,
+          inSafTree: false,
+        ),
+        isFalse,
+      );
+    });
   });
 }

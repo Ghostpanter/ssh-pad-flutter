@@ -4,6 +4,9 @@ import android.app.Activity
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
+import android.os.Environment
+import android.provider.OpenableColumns
+import android.provider.Settings
 import android.provider.DocumentsContract
 import android.provider.MediaStore
 import android.util.Log
@@ -26,6 +29,7 @@ class LocalFilesBridge(
     private val activity: MainActivity,
 ) {
     private var pendingTreeResult: MethodChannel.Result? = null
+    private var pendingDocsResult: MethodChannel.Result? = null
 
     fun handle(call: MethodCall, result: MethodChannel.Result) {
         when (call.method) {
@@ -34,6 +38,9 @@ class LocalFilesBridge(
                 bg(result) { listDownloadFiles(directory) }
             }
             "openDocumentTree" -> openDocumentTree(result)
+            "pickDocuments" -> pickDocuments(result)
+            "isAllFilesAccessGranted" -> result.success(isAllFilesAccessGranted())
+            "openAllFilesAccessSettings" -> result.success(openAllFilesAccessSettings())
             "listSafChildren" -> {
                 val treeUri = call.argument<String>("treeUri") ?: ""
                 val documentUri = call.argument<String>("documentUri")
@@ -55,6 +62,24 @@ class LocalFilesBridge(
     }
 
     fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?): Boolean {
+        if (requestCode == REQ_OPEN_DOCS) {
+            val pending = pendingDocsResult
+            pendingDocsResult = null
+            if (pending == null) return true
+            if (resultCode != Activity.RESULT_OK || data == null) {
+                pending.success(emptyList<Map<String, Any?>>())
+                return true
+            }
+            val uris = ArrayList<Uri>()
+            val clip = data.clipData
+            if (clip != null) {
+                for (i in 0 until clip.itemCount) clip.getItemAt(i).uri?.let { uris.add(it) }
+            } else {
+                data.data?.let { uris.add(it) }
+            }
+            pending.success(uris.map { describeUri(it) })
+            return true
+        }
         if (requestCode != REQ_OPEN_TREE) return false
         val pending = pendingTreeResult
         pendingTreeResult = null
@@ -94,6 +119,108 @@ class LocalFilesBridge(
             ),
         )
         return true
+    }
+
+    /** True when the app can read every file on shared storage via java.io. */
+    fun isAllFilesAccessGranted(): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            Environment.isExternalStorageManager()
+        } else {
+            activity.checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE) ==
+                android.content.pm.PackageManager.PERMISSION_GRANTED
+        }
+    }
+
+    /** Opens the system "All files access" page (API 30+) or asks READ/WRITE (≤29). */
+    private fun openAllFilesAccessSettings(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            activity.requestPermissions(
+                arrayOf(
+                    android.Manifest.permission.READ_EXTERNAL_STORAGE,
+                    android.Manifest.permission.WRITE_EXTERNAL_STORAGE,
+                ),
+                4405,
+            )
+            return true
+        }
+        val attempts = listOf(
+            Intent(
+                Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                Uri.parse("package:${activity.packageName}"),
+            ),
+            Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION),
+            Intent(
+                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                Uri.parse("package:${activity.packageName}"),
+            ),
+        )
+        for (intent in attempts) {
+            try {
+                activity.startActivity(intent)
+                return true
+            } catch (e: Exception) {
+                Log.w(TAG, "all-files settings intent failed: ${intent.action} $e")
+            }
+        }
+        return false
+    }
+
+    /** ACTION_OPEN_DOCUMENT multi-select: any file regardless of owner app. */
+    private fun pickDocuments(result: MethodChannel.Result) {
+        if (pendingDocsResult != null) {
+            result.error("busy", "file picker already open", null)
+            return
+        }
+        pendingDocsResult = result
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "*/*"
+            putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                putExtra(
+                    DocumentsContract.EXTRA_INITIAL_URI,
+                    Uri.parse(
+                        "content://com.android.externalstorage.documents/document/primary:Download",
+                    ),
+                )
+            }
+        }
+        try {
+            activity.startActivityForResult(intent, REQ_OPEN_DOCS)
+        } catch (e: Exception) {
+            pendingDocsResult = null
+            result.error("picker", e.message, null)
+        }
+    }
+
+    private fun describeUri(uri: Uri): Map<String, Any?> {
+        var name: String? = null
+        var size: Long? = null
+        try {
+            activity.contentResolver.query(
+                uri,
+                arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE),
+                null, null, null,
+            )?.use { c ->
+                if (c.moveToFirst()) {
+                    val ni = c.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    val si = c.getColumnIndex(OpenableColumns.SIZE)
+                    if (ni >= 0) name = c.getString(ni)
+                    if (si >= 0 && !c.isNull(si)) size = c.getLong(si)
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "describeUri failed: $e")
+        }
+        val n = name ?: uri.lastPathSegment?.substringAfterLast('/') ?: "file"
+        return mapOf(
+            "name" to n,
+            "path" to "",
+            "isDirectory" to false,
+            "size" to size,
+            "contentUri" to uri.toString(),
+        )
     }
 
     private fun openDocumentTree(result: MethodChannel.Result) {
@@ -354,6 +481,7 @@ class LocalFilesBridge(
     companion object {
         private const val TAG = "SshPadFiles"
         const val REQ_OPEN_TREE = 4403
+        const val REQ_OPEN_DOCS = 4404
         private const val PREFS = "sshpad_saf"
         private const val PREF_TREES = "trees"
 

@@ -100,9 +100,7 @@ Future<List<LocalFsEntry>> listLocalDirectory(String dirPath) async {
       }
 
       if (type == FileSystemEntityType.directory) {
-        entries.add(
-          LocalFsEntry(name: name, path: e.path, isDirectory: true),
-        );
+        entries.add(LocalFsEntry(name: name, path: e.path, isDirectory: true));
         continue;
       }
 
@@ -121,12 +119,7 @@ Future<List<LocalFsEntry>> listLocalDirectory(String dirPath) async {
           }
         }
         entries.add(
-          LocalFsEntry(
-            name: name,
-            path: e.path,
-            isDirectory: false,
-            size: len,
-          ),
+          LocalFsEntry(name: name, path: e.path, isDirectory: false, size: len),
         );
         continue;
       }
@@ -146,7 +139,6 @@ Future<List<LocalFsEntry>> listLocalDirectory(String dirPath) async {
   });
   return entries;
 }
-
 
 /// Normalize separators and drop a trailing slash (except root).
 String normalizeLocalPath(String path) {
@@ -221,4 +213,15 @@ List<LocalFsEntry> mergeLocalEntries(
     return a.name.toLowerCase().compareTo(b.name.toLowerCase());
   });
   return list;
+}
+
+/// Whether the Download view should show the "some files may be hidden"
+/// hint with the all-files / pick-files actions.
+bool shouldShowDownloadAccessHint({
+  required String path,
+  required bool allFilesAccess,
+  required bool inSafTree,
+}) {
+  if (allFilesAccess || inSafTree) return false;
+  return isPublicDownloadPath(path);
 }

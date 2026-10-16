@@ -32,7 +32,8 @@ class FilesPage extends ConsumerStatefulWidget {
 
 typedef _LocalEntry = LocalFsEntry;
 
-class _FilesPageState extends ConsumerState<FilesPage> {
+class _FilesPageState extends ConsumerState<FilesPage>
+    with WidgetsBindingObserver {
   List<RemoteFileEntry> _remote = [];
   List<_LocalEntry> _local = [];
   bool _loadingRemote = true;
@@ -47,6 +48,7 @@ class _FilesPageState extends ConsumerState<FilesPage> {
   final List<_SafCrumb> _safCrumbs = [];
   final LocalStorageChannel _storage = const LocalStorageChannel();
   String? _scopedHintFor;
+  bool _allFilesAccess = false;
 
   FileBrowserSession? get _session {
     final mgr = ref.read(sessionManagerProvider);
@@ -61,7 +63,9 @@ class _FilesPageState extends ConsumerState<FilesPage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) async {
+      await _refreshAllFilesAccess();
       await _initLocalRoot();
       await Future.wait([_reloadRemote(), _reloadLocal()]);
     });
@@ -133,6 +137,61 @@ class _FilesPageState extends ConsumerState<FilesPage> {
     }
   }
 
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed || !mounted) return;
+    () async {
+      final before = _allFilesAccess;
+      await _refreshAllFilesAccess();
+      if (!mounted) return;
+      if (before != _allFilesAccess && _safTreeUri == null) {
+        await _reloadLocal();
+      }
+    }();
+  }
+
+  Future<void> _refreshAllFilesAccess() async {
+    final v = await _storage.isAllFilesAccessGranted();
+    if (mounted && v != _allFilesAccess) setState(() => _allFilesAccess = v);
+  }
+
+  Future<void> _requestAllFilesAccess() async {
+    final ok = await _storage.openAllFilesAccessSettings();
+    if (!ok && mounted) {
+      _snack('无法打开系统设置，请在 设置 › 应用 › SSH Pad › 权限 中开启「所有文件访问」');
+    }
+  }
+
+  /// Pick any files (any owner app) via the system picker and upload them.
+  Future<void> _pickAndUploadDocuments() async {
+    if (_session == null) {
+      _snack('未连接远程');
+      return;
+    }
+    List<_LocalEntry> picked;
+    try {
+      picked = await _storage.pickDocuments();
+    } on PlatformException catch (e) {
+      _snack('无法打开系统文件选择：${e.message ?? e.code}');
+      return;
+    }
+    if (picked.isEmpty) return;
+    await _run(() async {
+      for (final e in picked) {
+        final bytes = await _readLocalBytes(e);
+        await _session!.backend.upload(e.name, bytes);
+        sessionLog.add('Uploaded ${e.name} → remote');
+      }
+    });
+    if (mounted) _snack('已上传 ${picked.length} 个文件');
+  }
+
   Future<void> _reloadLocal() async {
     if (_safTreeUri != null) {
       await _reloadSaf();
@@ -146,7 +205,9 @@ class _FilesPageState extends ConsumerState<FilesPage> {
     try {
       final ioEntries = await listLocalDirectory(_localPath);
       var entries = ioEntries;
-      if (Platform.isAndroid && isPublicDownloadPath(_localPath)) {
+      if (Platform.isAndroid &&
+          !_allFilesAccess &&
+          isPublicDownloadPath(_localPath)) {
         await _ensureLocalStorageAccess();
         final media = await _storage.listDownloadFiles(_localPath);
         entries = mergeLocalEntries(ioEntries, media);
@@ -200,12 +261,12 @@ class _FilesPageState extends ConsumerState<FilesPage> {
   }
 
   void _maybeHintScopedDownload(List<_LocalEntry> entries) {
-    if (!Platform.isAndroid || _safTreeUri != null) return;
+    if (!Platform.isAndroid || _safTreeUri != null || _allFilesAccess) return;
     if (!isPublicDownloadPath(_localPath)) return;
     if (entries.any((e) => !e.isDirectory)) return;
     if (_scopedHintFor == _localPath) return;
     _scopedHintFor = _localPath;
-    _snack('此目录受分区存储限制，文件未列出。请点「选择文件夹」授权 Download');
+    _snack('系统限制了此目录的文件显示，可授予所有文件访问权限或点「选择文件」');
   }
 
   Future<void> _pickLocalFolder() async {
@@ -355,8 +416,9 @@ class _FilesPageState extends ConsumerState<FilesPage> {
       try {
         await _storage.writeSafFile(
           treeUri: tree,
-          parentDocumentUri:
-              _safCrumbs.isEmpty ? null : _safCrumbs.last.documentUri,
+          parentDocumentUri: _safCrumbs.isEmpty
+              ? null
+              : _safCrumbs.last.documentUri,
           name: name,
           sourcePath: tmp.path,
         );
@@ -584,22 +646,57 @@ class _FilesPageState extends ConsumerState<FilesPage> {
               onPressed: _busy ? null : _pickLocalFolder,
               icon: const Icon(Icons.folder_open, size: 18),
             ),
+            if (Platform.isAndroid)
+              IconButton(
+                tooltip: '选择文件（上传）',
+                visualDensity: VisualDensity.compact,
+                onPressed: _busy ? null : _pickAndUploadDocuments,
+                icon: const Icon(Icons.file_open_outlined, size: 18),
+              ),
           ],
         ),
         _pathBar(_localPath, icon: Icons.sd_storage_outlined),
         if (_loadingLocal) const LinearProgressIndicator(minHeight: 2),
-        if (!_loadingLocal &&
-            _safTreeUri == null &&
-            isPublicDownloadPath(_localPath) &&
-            !_local.any((e) => !e.isDirectory))
+        if (Platform.isAndroid &&
+            !_loadingLocal &&
+            shouldShowDownloadAccessHint(
+              path: _localPath,
+              allFilesAccess: _allFilesAccess,
+              inSafTree: _safTreeUri != null,
+            ))
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 6, 12, 2),
-            child: Text(
-              '分区存储隐藏了此目录中的文件。点「选择文件夹」授权后即可看到并上传。',
-              style: TextStyle(
-                fontSize: 12,
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
-              ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '系统权限可能隐藏了此目录中其他应用创建的文件。'
+                  '授予所有文件访问权限后可全部显示；也可用「选择文件」直接选取上传，'
+                  '或用「选择文件夹」授权 Download 下的子文件夹。',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                Wrap(
+                  spacing: 8,
+                  children: [
+                    TextButton.icon(
+                      onPressed: _busy ? null : _requestAllFilesAccess,
+                      icon: const Icon(
+                        Icons.admin_panel_settings_outlined,
+                        size: 16,
+                      ),
+                      label: const Text('授予所有文件访问权限'),
+                    ),
+                    TextButton.icon(
+                      onPressed: _busy ? null : _pickAndUploadDocuments,
+                      icon: const Icon(Icons.file_open_outlined, size: 16),
+                      label: const Text('选择文件'),
+                    ),
+                  ],
+                ),
+              ],
             ),
           ),
         if (_localError != null)
@@ -634,20 +731,34 @@ class _FilesPageState extends ConsumerState<FilesPage> {
                       title: Text(
                         e.name,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
+                        style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w500,
+                        ),
                       ),
                       subtitle: Text(
                         e.isDirectory ? '目录' : _formatSize(e.size),
-                        style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: scheme.onSurfaceVariant,
+                        ),
                       ),
                       onTap: e.isDirectory ? () => _openLocalDir(e) : null,
                       trailing: e.isDirectory
-                          ? Icon(Icons.chevron_right, size: 18, color: scheme.onSurfaceVariant)
+                          ? Icon(
+                              Icons.chevron_right,
+                              size: 18,
+                              color: scheme.onSurfaceVariant,
+                            )
                           : IconButton(
                               tooltip: '上传到远程',
                               visualDensity: VisualDensity.compact,
                               onPressed: _busy ? null : () => _uploadLocal(e),
-                              icon: Icon(Icons.upload, size: 18, color: scheme.primary),
+                              icon: Icon(
+                                Icons.upload,
+                                size: 18,
+                                color: scheme.primary,
+                              ),
                             ),
                     );
                   },
@@ -659,7 +770,8 @@ class _FilesPageState extends ConsumerState<FilesPage> {
 
   Widget _remotePane({required List<Widget> actions}) {
     final session = _session;
-    final cleartext = session?.profile.protocol == HostProtocol.ftp &&
+    final cleartext =
+        session?.profile.protocol == HostProtocol.ftp &&
         session?.profile.ftpSecure == FtpSecureMode.none;
 
     return Column(
@@ -683,8 +795,12 @@ class _FilesPageState extends ConsumerState<FilesPage> {
           title: session?.keepAliveTitle ?? '远程',
           actions: actions,
         ),
-        _pathBar(session?.backend.currentPath ?? '', icon: Icons.cloud_queue_outlined),
-        if (_busy || _loadingRemote) const LinearProgressIndicator(minHeight: 2),
+        _pathBar(
+          session?.backend.currentPath ?? '',
+          icon: Icons.cloud_queue_outlined,
+        ),
+        if (_busy || _loadingRemote)
+          const LinearProgressIndicator(minHeight: 2),
         if (_remoteError != null)
           Padding(
             padding: const EdgeInsets.all(12),
@@ -717,11 +833,17 @@ class _FilesPageState extends ConsumerState<FilesPage> {
                       title: Text(
                         e.name,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
+                        style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w500,
+                        ),
                       ),
                       subtitle: Text(
                         e.isDirectory ? '目录' : _formatSize(e.size),
-                        style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: scheme.onSurfaceVariant,
+                        ),
                       ),
                       onTap: e.isDirectory ? () => _openRemoteDir(e) : null,
                       trailing: Row(
@@ -731,8 +853,14 @@ class _FilesPageState extends ConsumerState<FilesPage> {
                             IconButton(
                               tooltip: '下载到本地',
                               visualDensity: VisualDensity.compact,
-                              onPressed: _busy ? null : () => _downloadToLocal(e),
-                              icon: Icon(Icons.download, size: 18, color: scheme.primary),
+                              onPressed: _busy
+                                  ? null
+                                  : () => _downloadToLocal(e),
+                              icon: Icon(
+                                Icons.download,
+                                size: 18,
+                                color: scheme.primary,
+                              ),
                             ),
                           PopupMenuButton<String>(
                             tooltip: '更多',
@@ -778,7 +906,9 @@ class _FilesPageState extends ConsumerState<FilesPage> {
           visualDensity: VisualDensity.compact,
           onPressed: () => setState(() => _showLocalNarrow = !_showLocalNarrow),
           icon: Icon(
-            _showLocalNarrow ? Icons.phone_android : Icons.phone_android_outlined,
+            _showLocalNarrow
+                ? Icons.phone_android
+                : Icons.phone_android_outlined,
             size: 18,
           ),
         ),
@@ -822,7 +952,9 @@ class _FilesPageState extends ConsumerState<FilesPage> {
                 child: DecoratedBox(
                   decoration: BoxDecoration(
                     border: Border(
-                      right: BorderSide(color: scheme.outline.withValues(alpha: 0.35)),
+                      right: BorderSide(
+                        color: scheme.outline.withValues(alpha: 0.35),
+                      ),
                     ),
                   ),
                   child: _localPane(),
@@ -854,7 +986,9 @@ class _FilesPageState extends ConsumerState<FilesPage> {
                 height: 44,
                 decoration: BoxDecoration(
                   border: Border(
-                    bottom: BorderSide(color: scheme.outline.withValues(alpha: 0.45)),
+                    bottom: BorderSide(
+                      color: scheme.outline.withValues(alpha: 0.45),
+                    ),
                   ),
                 ),
                 padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -891,9 +1025,7 @@ class _FilesPageState extends ConsumerState<FilesPage> {
     }
 
     return Scaffold(
-      appBar: AppBar(
-        title: Text(_session?.keepAliveTitle ?? '文件'),
-      ),
+      appBar: AppBar(title: Text(_session?.keepAliveTitle ?? '文件')),
       body: body,
     );
   }
@@ -922,4 +1054,3 @@ class _SafCrumb {
   final String name;
   final String documentUri;
 }
-
