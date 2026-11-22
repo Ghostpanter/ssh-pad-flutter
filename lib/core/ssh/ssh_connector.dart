@@ -6,21 +6,44 @@ import '../../data/host_profile.dart';
 import '../security/host_key_verifier.dart';
 import '../session/session_log.dart';
 
+/// Answers a keyboard-interactive challenge. Return null to refuse the method.
+typedef KeyboardInteractiveHandler = Future<List<String>?> Function(
+  HostProfile profile,
+  SSHUserInfoRequest request,
+);
+
 /// Shared SSH connect + auth + TOFU host-key check for terminal and SFTP.
 class SshConnector {
   /// Optional app-wide verifier (set from main / providers).
   static HostKeyVerifier? hostKeyVerifier;
 
-  static Future<SSHClient> connect(HostProfile profile) async {
+  /// Optional UI prompt for keyboard-interactive (OTP, PAM). Null skips it.
+  static KeyboardInteractiveHandler? keyboardInteractive;
+
+  /// [via] is an already authenticated jump client. Each hop still verifies
+  /// its own host key before any credential is sent.
+  static Future<SSHClient> connect(
+    HostProfile profile, {
+    SSHClient? via,
+  }) async {
+    final jumped = via != null;
     sessionLog.add(
-      'Connecting ${profile.protocol.label} ${profile.host}:${profile.port}',
+      jumped
+          ? 'Connecting ${profile.protocol.label} ${profile.host}:${profile.port} via jump'
+          : 'Connecting ${profile.protocol.label} ${profile.host}:${profile.port}',
     );
 
-    final socket = await SSHSocket.connect(
-      profile.host,
-      profile.port,
-      timeout: const Duration(seconds: 20),
-    );
+    final SSHSocket socket;
+    if (via == null) {
+      socket = await SSHSocket.connect(
+        profile.host,
+        profile.port,
+        timeout: const Duration(seconds: 20),
+      );
+    } else {
+      // direct-tcpip. localHost/localPort are originator fields, not a bind.
+      socket = await via.forwardLocal(profile.host, profile.port);
+    }
 
     List<SSHKeyPair>? identities;
     if (profile.auth == AuthMethod.key) {
@@ -31,16 +54,22 @@ class SshConnector {
       identities = SSHKeyPair.fromPem(pem, profile.passphrase);
     }
 
+    final interactive = keyboardInteractive;
     final verifier = hostKeyVerifier;
     final client = SSHClient(
       socket,
       username: profile.username.isEmpty ? 'root' : profile.username,
       identities: identities,
-      onPasswordRequest: profile.auth == AuthMethod.password
-          ? () => profile.password ?? ''
-          : (profile.passphrase != null && profile.passphrase!.isNotEmpty
-              ? () => profile.passphrase!
-              : null),
+      onPasswordRequest: profile.auth == AuthMethod.keyboardInteractive
+          ? null
+          : profile.auth == AuthMethod.password
+              ? () => profile.password ?? ''
+              : (profile.passphrase != null && profile.passphrase!.isNotEmpty
+                  ? () => profile.passphrase!
+                  : null),
+      onUserInfoRequest: interactive == null
+          ? null
+          : (request) => interactive(profile, request),
       keepAliveInterval: const Duration(seconds: 8),
       onVerifyHostKey: (type, fingerprint) async {
         if (verifier == null) {

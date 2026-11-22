@@ -24,11 +24,15 @@ class _HostEditorPageState extends ConsumerState<HostEditorPage> {
   late final TextEditingController _username;
   late final TextEditingController _password;
   late final TextEditingController _privateKey;
+  late final TextEditingController _group;
+  late final TextEditingController _tags;
+  late final List<ForwardSpec> _forwards;
   late HostProtocol _protocol;
   late AuthMethod _auth;
   late FtpSecureMode _ftpSecure;
   late bool _ftpPassive;
   late bool _saveSecret;
+  String? _jumpHostId;
 
   @override
   void initState() {
@@ -48,6 +52,10 @@ class _HostEditorPageState extends ConsumerState<HostEditorPage> {
     _username = TextEditingController(text: e?.username ?? '');
     _password = TextEditingController(text: e?.password ?? e?.passphrase ?? '');
     _privateKey = TextEditingController(text: e?.privateKey ?? '');
+    _group = TextEditingController(text: e?.group ?? '');
+    _tags = TextEditingController(text: e?.tags.join(', ') ?? '');
+    _forwards = [...?e?.forwards];
+    _jumpHostId = e?.jumpHostId;
   }
 
   @override
@@ -58,6 +66,8 @@ class _HostEditorPageState extends ConsumerState<HostEditorPage> {
     _username.dispose();
     _password.dispose();
     _privateKey.dispose();
+    _group.dispose();
+    _tags.dispose();
     super.dispose();
   }
 
@@ -91,6 +101,14 @@ class _HostEditorPageState extends ConsumerState<HostEditorPage> {
         _protocol.defaultPort ??
         22;
     final pwd = _password.text.isEmpty ? null : _password.text;
+    final tags = _tags.text
+        .split(RegExp(r'[,，]'))
+        .map((s) => s.trim())
+        .where((s) => s.isNotEmpty)
+        .toList();
+    final known = ref.read(hostListProvider).map((h) => h.id).toSet();
+    final selfId = widget.existing?.id;
+    final jump = _jumpHostId;
     return HostProfile(
       id: widget.existing?.id ??
           DateTime.now().millisecondsSinceEpoch.toString(),
@@ -108,6 +126,17 @@ class _HostEditorPageState extends ConsumerState<HostEditorPage> {
       ftpSecure: _ftpSecure,
       ftpPassive: _ftpPassive,
       saveSecret: _saveSecret,
+      group: _group.text.trim(),
+      tags: tags,
+      jumpHostId: jump != null &&
+              jump.isNotEmpty &&
+              jump != selfId &&
+              known.contains(jump)
+          ? jump
+          : null,
+      forwards: _protocol == HostProtocol.ssh || _protocol == HostProtocol.sftp
+          ? List<ForwardSpec>.from(_forwards)
+          : const [],
     );
   }
 
@@ -144,6 +173,180 @@ class _HostEditorPageState extends ConsumerState<HostEditorPage> {
       ),
     );
     await mgr.open(profile);
+  }
+
+  Widget _jumpField() {
+    final hosts = ref.watch(hostListProvider);
+    final selfId = widget.existing?.id;
+    final options = hosts.where((h) {
+      if (h.id == selfId) return false;
+      return h.protocol == HostProtocol.ssh || h.protocol == HostProtocol.sftp;
+    }).toList();
+    final selected =
+        options.any((h) => h.id == _jumpHostId) ? _jumpHostId : null;
+    return DropdownButtonFormField<String?>(
+      // ignore: deprecated_member_use
+      value: selected,
+      decoration: const InputDecoration(
+        labelText: '跳板',
+        border: OutlineInputBorder(),
+      ),
+      items: [
+        const DropdownMenuItem<String?>(
+          value: null,
+          child: Text('直接连接'),
+        ),
+        for (final h in options)
+          DropdownMenuItem<String?>(
+            value: h.id,
+            child: Text(
+              h.name.isEmpty ? '${h.host}:${h.port}' : h.name,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+      ],
+      onChanged: (v) => setState(() => _jumpHostId = v),
+    );
+  }
+
+  Widget _forwardSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text('端口转发', style: Theme.of(context).textTheme.titleSmall),
+        const SizedBox(height: 4),
+        Text(
+          '只监听本机 127.0.0.1，随这条 SSH 会话启动和关闭。',
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
+        for (var i = 0; i < _forwards.length; i++)
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+            title: Text(_forwards[i].label),
+            trailing: IconButton(
+              tooltip: '删除',
+              icon: const Icon(Icons.close),
+              onPressed: () => setState(() => _forwards.removeAt(i)),
+            ),
+          ),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: TextButton.icon(
+            onPressed: _addForward,
+            icon: const Icon(Icons.add),
+            label: const Text('添加转发'),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _addForward() async {
+    var kind = ForwardKind.local;
+    final listen = TextEditingController();
+    final targetHost = TextEditingController(text: '127.0.0.1');
+    final targetPort = TextEditingController();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setLocal) {
+            final needsTarget = kind != ForwardKind.socks;
+            return AlertDialog(
+              title: const Text('端口转发'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  DropdownButtonFormField<ForwardKind>(
+                    // ignore: deprecated_member_use
+                    value: kind,
+                    decoration: const InputDecoration(
+                      labelText: '类型',
+                      border: OutlineInputBorder(),
+                    ),
+                    items: const [
+                      DropdownMenuItem(
+                        value: ForwardKind.local,
+                        child: Text('本地 -L'),
+                      ),
+                      DropdownMenuItem(
+                        value: ForwardKind.remote,
+                        child: Text('远端 -R'),
+                      ),
+                      DropdownMenuItem(
+                        value: ForwardKind.socks,
+                        child: Text('SOCKS -D'),
+                      ),
+                    ],
+                    onChanged: (v) => setLocal(() => kind = v ?? kind),
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: listen,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(
+                      labelText: '监听端口',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  if (needsTarget) ...[
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: targetHost,
+                      decoration: InputDecoration(
+                        labelText: kind == ForwardKind.local ? '远端主机' : '本机主机',
+                        border: const OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: targetPort,
+                      keyboardType: TextInputType.number,
+                      decoration: InputDecoration(
+                        labelText: kind == ForwardKind.local ? '远端端口' : '本机端口',
+                        border: const OutlineInputBorder(),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx, false),
+                  child: const Text('取消'),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.pop(ctx, true),
+                  child: const Text('添加'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+    final listenPort = int.tryParse(listen.text.trim()) ?? 0;
+    final destPort = int.tryParse(targetPort.text.trim()) ?? 0;
+    if (ok == true && listenPort > 0 && listenPort < 65536) {
+      if (kind == ForwardKind.socks || (destPort > 0 && destPort < 65536)) {
+        setState(() {
+          _forwards.add(
+            ForwardSpec(
+              kind: kind,
+              listenPort: listenPort,
+              targetHost: targetHost.text.trim().isEmpty
+                  ? '127.0.0.1'
+                  : targetHost.text.trim(),
+              targetPort: kind == ForwardKind.socks ? 0 : destPort,
+            ),
+          );
+        });
+      }
+    }
+    listen.dispose();
+    targetHost.dispose();
+    targetPort.dispose();
   }
 
   @override
@@ -235,6 +438,10 @@ class _HostEditorPageState extends ConsumerState<HostEditorPage> {
               items: const [
                 DropdownMenuItem(value: AuthMethod.password, child: Text('密码')),
                 DropdownMenuItem(value: AuthMethod.key, child: Text('私钥')),
+                DropdownMenuItem(
+                  value: AuthMethod.keyboardInteractive,
+                  child: Text('键盘交互'),
+                ),
               ],
               onChanged: (v) => setState(() => _auth = v ?? AuthMethod.password),
             ),
@@ -243,8 +450,13 @@ class _HostEditorPageState extends ConsumerState<HostEditorPage> {
           TextField(
             controller: _password,
             obscureText: true,
+            enabled: _auth != AuthMethod.keyboardInteractive,
             decoration: InputDecoration(
-              labelText: _auth == AuthMethod.key ? '私钥口令（可选）' : '密码',
+              labelText: _auth == AuthMethod.key
+                  ? '私钥口令（可选）'
+                  : _auth == AuthMethod.keyboardInteractive
+                      ? '不用填，连接时再输入'
+                      : '密码',
               border: const OutlineInputBorder(),
             ),
           ),
@@ -305,6 +517,30 @@ class _HostEditorPageState extends ConsumerState<HostEditorPage> {
             value: _saveSecret,
             onChanged: (v) => setState(() => _saveSecret = v),
           ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _group,
+            decoration: const InputDecoration(
+              labelText: '分组',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _tags,
+            decoration: const InputDecoration(
+              labelText: '标签',
+              hintText: '用逗号分隔',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          if (_protocol == HostProtocol.ssh ||
+              _protocol == HostProtocol.sftp) ...[
+            const SizedBox(height: 12),
+            _jumpField(),
+            const SizedBox(height: 12),
+            _forwardSection(),
+          ],
           const SizedBox(height: 24),
           FilledButton.icon(
             onPressed: () => _save(connect: true),

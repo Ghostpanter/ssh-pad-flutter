@@ -78,9 +78,59 @@ enum HostProtocol {
   }
 }
 
-enum AuthMethod { password, key }
+enum AuthMethod { password, key, keyboardInteractive }
 
 enum FtpSecureMode { none, ftps, ftpes }
+
+enum ForwardKind { local, remote, socks }
+
+/// A port forward that starts with the host's SSH session.
+///
+/// [listenPort] is the bound port (device side for local/socks, remote side
+/// for remote). [targetHost]/[targetPort] are the far end of an L/R forward.
+class ForwardSpec {
+  const ForwardSpec({
+    required this.kind,
+    required this.listenPort,
+    this.targetHost = '127.0.0.1',
+    this.targetPort = 0,
+  });
+
+  final ForwardKind kind;
+  final int listenPort;
+  final String targetHost;
+  final int targetPort;
+
+  String get label {
+    switch (kind) {
+      case ForwardKind.local:
+        return 'L $listenPort → $targetHost:$targetPort';
+      case ForwardKind.remote:
+        return 'R $listenPort ← $targetHost:$targetPort';
+      case ForwardKind.socks:
+        return 'D $listenPort';
+    }
+  }
+
+  Map<String, dynamic> toJson() => {
+        'kind': kind.name,
+        'listenPort': listenPort,
+        'targetHost': targetHost,
+        'targetPort': targetPort,
+      };
+
+  factory ForwardSpec.fromJson(Map<String, dynamic> json) {
+    return ForwardSpec(
+      kind: ForwardKind.values.firstWhere(
+        (e) => e.name == (json['kind'] as String? ?? 'local'),
+        orElse: () => ForwardKind.local,
+      ),
+      listenPort: (json['listenPort'] as num?)?.toInt() ?? 0,
+      targetHost: json['targetHost'] as String? ?? '127.0.0.1',
+      targetPort: (json['targetPort'] as num?)?.toInt() ?? 0,
+    );
+  }
+}
 
 class HostProfile {
   HostProfile({
@@ -99,6 +149,10 @@ class HostProfile {
     this.serialDeviceId,
     this.baudRate,
     this.saveSecret = false,
+    this.group = '',
+    this.tags = const [],
+    this.jumpHostId,
+    this.forwards = const [],
   }) : port = port ?? protocol.defaultPort ?? 22;
 
   final String id;
@@ -118,6 +172,14 @@ class HostProfile {
   final int? baudRate;
   final bool saveSecret;
 
+  /// Empty means ungrouped.
+  final String group;
+  final List<String> tags;
+
+  /// Another saved host used as the first SSH hop. Empty/null is a direct dial.
+  final String? jumpHostId;
+  final List<ForwardSpec> forwards;
+
   HostProfile copyWith({
     String? id,
     String? name,
@@ -134,6 +196,11 @@ class HostProfile {
     String? serialDeviceId,
     int? baudRate,
     bool? saveSecret,
+    String? group,
+    List<String>? tags,
+    String? jumpHostId,
+    bool clearJump = false,
+    List<ForwardSpec>? forwards,
   }) {
     return HostProfile(
       id: id ?? this.id,
@@ -151,6 +218,10 @@ class HostProfile {
       serialDeviceId: serialDeviceId ?? this.serialDeviceId,
       baudRate: baudRate ?? this.baudRate,
       saveSecret: saveSecret ?? this.saveSecret,
+      group: group ?? this.group,
+      tags: tags ?? this.tags,
+      jumpHostId: clearJump ? null : (jumpHostId ?? this.jumpHostId),
+      forwards: forwards ?? this.forwards,
     );
   }
 
@@ -175,6 +246,12 @@ class HostProfile {
         if (serialDeviceId != null) 'serialDeviceId': serialDeviceId,
         if (baudRate != null) 'baudRate': baudRate,
         'saveSecret': saveSecret,
+        if (group.trim().isNotEmpty) 'group': group,
+        if (tags.isNotEmpty) 'tags': tags,
+        if (jumpHostId != null && jumpHostId!.isNotEmpty)
+          'jumpHostId': jumpHostId,
+        if (forwards.isNotEmpty)
+          'forwards': forwards.map((f) => f.toJson()).toList(),
         // Marker: secrets live in flutter_secure_storage when saveSecret.
         'secretsInSecureStore': true,
       };
@@ -203,6 +280,16 @@ class HostProfile {
       serialDeviceId: json['serialDeviceId'] as String?,
       baudRate: (json['baudRate'] as num?)?.toInt(),
       saveSecret: json['saveSecret'] as bool? ?? false,
+      group: json['group'] as String? ?? '',
+      tags: (json['tags'] as List<dynamic>? ?? const [])
+          .map((e) => e.toString())
+          .where((e) => e.trim().isNotEmpty)
+          .toList(),
+      jumpHostId: json['jumpHostId'] as String?,
+      forwards: (json['forwards'] as List<dynamic>? ?? const [])
+          .whereType<Map>()
+          .map((e) => ForwardSpec.fromJson(Map<String, dynamic>.from(e)))
+          .toList(),
     );
   }
 }

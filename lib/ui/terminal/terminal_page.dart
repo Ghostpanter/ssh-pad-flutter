@@ -12,6 +12,7 @@ import '../widgets/session_status.dart';
 import '../keyboard/app_escape_policy.dart';
 import 'extra_keys.dart';
 import 'hardware_keyboard_handler.dart';
+import 'snippet_bar.dart';
 import 'terminal_selection.dart';
 
 /// Soft IME style: visible-password reduces suggestions / smart punctuation.
@@ -525,6 +526,10 @@ class _TerminalPageState extends ConsumerState<TerminalPage>
                     },
                   ),
                 ),
+              ),
+              SnippetBar(
+                enabled: active.phase == SessionPhase.connected,
+                onSend: (body) => active.terminal.paste(body),
               ),
               ExtraKeysBar(
                 terminal: active.terminal,

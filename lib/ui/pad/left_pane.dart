@@ -114,27 +114,40 @@ class LeftPane extends ConsumerWidget {
                           ),
                     ),
                   ),
-                for (final h in hosts) ...[
-                  _HostCard(
-                    host: h,
-                    sessionPhase: _phaseForHost(mgr, h),
-                    selected: _isSelected(mgr, h),
-                    resourceStats: _statsForHost(mgr, h, statusMonitor),
-                    onTap: () => onConnectHost(h),
-                    onEdit: () {
-                      Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (_) => HostEditorPage(existing: h),
-                        ),
-                      );
-                    },
-                    onDelete: () =>
-                        ref.read(hostListProvider.notifier).delete(h.id),
-                    onCloseSession: () async {
-                      await mgr.disconnectHost(h.id);
-                    },
-                  ),
-                  const SizedBox(height: 4),
+                for (final key in _groupKeys(hosts)) ...[
+                  if (key.isNotEmpty || _groupKeys(hosts).length > 1)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(4, 8, 4, 2),
+                      child: Text(
+                        key.isEmpty ? '未分组' : key,
+                        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                              color: scheme.onSurfaceVariant,
+                              fontWeight: FontWeight.w700,
+                            ),
+                      ),
+                    ),
+                  for (final h in _hostsInGroup(hosts, key)) ...[
+                    _HostCard(
+                      host: h,
+                      sessionPhase: _phaseForHost(mgr, h),
+                      selected: _isSelected(mgr, h),
+                      resourceStats: _statsForHost(mgr, h, statusMonitor),
+                      onTap: () => onConnectHost(h),
+                      onEdit: () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => HostEditorPage(existing: h),
+                          ),
+                        );
+                      },
+                      onDelete: () =>
+                          ref.read(hostListProvider.notifier).delete(h.id),
+                      onCloseSession: () async {
+                        await mgr.disconnectHost(h.id);
+                      },
+                    ),
+                    const SizedBox(height: 4),
+                  ],
                 ],
                 if (mgr.sessions.isNotEmpty) ...[
                   const SizedBox(height: 8),
@@ -222,6 +235,25 @@ class LeftPane extends ConsumerWidget {
         ],
       ),
     );
+  }
+
+  static List<String> _groupKeys(List<HostProfile> hosts) {
+    final keys = <String>{
+      for (final h in hosts) h.group.trim(),
+    }.toList();
+    keys.sort((a, b) {
+      if (a.isEmpty) return 1;
+      if (b.isEmpty) return -1;
+      return a.toLowerCase().compareTo(b.toLowerCase());
+    });
+    return keys;
+  }
+
+  static List<HostProfile> _hostsInGroup(List<HostProfile> hosts, String key) {
+    return [
+      for (final h in hosts)
+        if (h.group.trim() == key) h,
+    ];
   }
 
   static SessionPhase? _phaseForHost(SessionManager mgr, HostProfile h) {
@@ -481,7 +513,8 @@ class _HostCard extends StatelessWidget {
                               const SizedBox(height: 2),
                               Text(
                                 '${host.host}:${host.port}'
-                                '${host.username.isEmpty ? '' : ' · ${host.username}'}',
+                                '${host.username.isEmpty ? '' : ' · ${host.username}'}'
+                                '${host.jumpHostId == null || host.jumpHostId!.isEmpty ? '' : ' · 跳板'}',
                                 style: TextStyle(
                                   fontSize: 11,
                                   height: 1.15,

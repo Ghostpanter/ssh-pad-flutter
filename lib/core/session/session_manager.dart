@@ -19,7 +19,16 @@ class SessionManager extends ChangeNotifier {
   SessionManager(
     this._keepalive, {
     this._hostStore,
-  }) : sshHub = SshConnectionHub();
+  }) : sshHub = SshConnectionHub() {
+    sshHub.resolveHost = (id) async {
+      final store = _hostStore;
+      if (store == null) return null;
+      for (final host in store.loadAll()) {
+        if (host.id == id) return store.withSecrets(host);
+      }
+      return null;
+    };
+  }
 
   final KeepAliveController _keepalive;
   final HostStore? _hostStore;

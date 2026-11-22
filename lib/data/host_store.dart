@@ -39,6 +39,10 @@ class HostStore {
         serialDeviceId: h.serialDeviceId,
         baudRate: h.baudRate,
         saveSecret: h.saveSecret,
+        group: h.group,
+        tags: h.tags,
+        jumpHostId: h.jumpHostId,
+        forwards: h.forwards,
       );
 
   HostProfile _withSecrets(
@@ -63,6 +67,10 @@ class HostStore {
         serialDeviceId: h.serialDeviceId,
         baudRate: h.baudRate,
         saveSecret: h.saveSecret,
+        group: h.group,
+        tags: h.tags,
+        jumpHostId: h.jumpHostId,
+        forwards: h.forwards,
       );
 
   /// Migrate plaintext prefs secrets → secure storage, then hydrate.

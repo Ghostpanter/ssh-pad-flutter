@@ -12,6 +12,7 @@ import 'ui/keyboard/app_escape_policy.dart';
 import 'ui/keyboard/root_back_guard.dart';
 import 'ui/pad/pad_shell.dart';
 import 'ui/security/host_key_dialog.dart';
+import 'ui/security/keyboard_auth_dialog.dart';
 import 'ui/theme.dart';
 
 final navigatorKey = GlobalKey<NavigatorState>();
@@ -58,6 +59,11 @@ class _SshPadAppState extends ConsumerState<SshPadApp> {
         final ctx = navigatorKey.currentContext;
         if (ctx == null) return HostKeyDecision.reject;
         return showHostKeyDialog(ctx, request);
+      };
+      SshConnector.keyboardInteractive = (profile, request) async {
+        final ctx = navigatorKey.currentContext;
+        if (ctx == null) return null;
+        return showKeyboardAuthDialog(ctx, profile, request);
       };
     });
   }
