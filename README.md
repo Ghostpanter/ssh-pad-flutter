@@ -7,7 +7,7 @@ Pad 优先的 Flutter SSH / Telnet / SFTP / FTP 终端客户端。
 
 ## 产品目标
 
-- **Pad 优先 UI**：宽屏（≥600dp）左栏节点/会话 + 可拖分割条 + 右栏终端/文件；窄屏 NavigationRail。
+- **Pad 优先 UI**：宽屏（≥600dp）左栏节点/会话 + 可拖分割条 + 右栏终端/文件；窄屏 NavigationRail。宽屏终端可再打开右侧文件栏，与当前会话并排。
 - **外接 / 蓝牙键盘**：`configChanges` 含 keyboard；Ctrl-C = SIGINT；resume 清 IME 组字；插拔/旋转 refit PTY。
 - **首发协议**：SSH、SFTP、TELNET、FTP；主机档案含 `protocol` 字段。
 - **保活是重中之重**：切应用/熄屏不断开；同进程 ForegroundService（`mediaPlayback|dataSync`）+ 默认弱音 AudioTrack + Wake/Wifi 锁 + 首次连接电池白名单 + OEM 引导；默认**不**无限静默自动重连。
@@ -56,12 +56,16 @@ Pad 优先的 Flutter SSH / Telnet / SFTP / FTP 终端客户端。
 13. **v0.5.9** — 终端顶栏紧凑化（状态+标签合并单行）
 14. **v0.5.10** — 本地 Download/SAF 可见文件 + 终端选区复制粘贴
 15. **v0.5.11** — 卓易通环境检测后提示并退出（不做兼容）
-16. **v0.5.14** — Motty 式连接能力：跳板链（逐跳校验主机密钥）、键盘交互、分组/标签、随会话启停的 -L/-R/-D（仅 127.0.0.1）、终端快捷命令。平板键盘与前台保活未改。
-17. **v0.5.15** — 把 Go 引擎里值得留下的部分做进现有连接，不嵌 Go：直连 TCP 关 Nagle（和 `net.Dial` 一样）；SFTP 读写改为 64 KiB × 64 个在途请求；端口转发改成带背压的双向拷贝；私钥主机可选 `ssh -A`（进程内 agent，默认关）。算法表沿用 dartssh2 4.1 的默认（x25519、AES-GCM、ChaCha20）。OpenSSH 证书 dartssh2 签不了，没做。PTY 请求仍逐条等回复，拒绝就失败，不把 shell 开成无 PTY。键盘和前台保活未改。
+16. **v0.5.12** — 已建立会话手动重连（保留标签与终端内容）
+17. **v0.5.13** — 权限收紧时访问 Download 全部文件（所有文件访问 / 系统选择器）
+18. **v0.5.14** — Motty 式连接能力：跳板链（逐跳校验主机密钥）、键盘交互、分组/标签、随会话启停的 -L/-R/-D（仅 127.0.0.1）、终端快捷命令。平板键盘与前台保活未改。
+19. **v0.5.15** — 把 Go 引擎里值得留下的部分做进现有连接，不嵌 Go：直连 TCP 关 Nagle（和 `net.Dial` 一样）；SFTP 读写改为 64 KiB × 64 个在途请求；端口转发改成带背压的双向拷贝；私钥主机可选 `ssh -A`（进程内 agent，默认关）。算法表沿用 dartssh2 4.1 的默认（x25519、AES-GCM、ChaCha20）。OpenSSH 证书 dartssh2 签不了，没做。PTY 请求仍逐条等回复，拒绝就失败，不把 shell 开成无 PTY。键盘和前台保活未改。
+20. **v0.5.16** — 宽屏终端与文件并排（同一 SSH 会话） ← 当前
 
 ## Pad 布局与键盘（M3）
 
 - **≥600dp**：左栏主机卡片 / 会话列表，中间 14dp 拖拽分割条（宽度持久化），右栏终端或文件。
+- **终端 + 文件并排（v0.5.16）**：当右侧内容区宽度 ≥700dp（平板横屏及其他宽屏）时，工具栏文件夹按钮可在终端右侧打开 SFTP 文件栏，共用同一 SSH 连接；分割条可拖动，宽度与开关会记住。窄屏仍使用原来的「文件」页，不强行挤在一行。
 - **&lt;600dp**：`NavigationRail`（主机 / 终端 / 文件 / 设置），避免破坏手机布局。
 - **安全区**：顶栏控件最小点击热区 **48dp**；OEM 状态栏 inset 为 0 时保底 40dp。
 - **终端顶栏（v0.5.9）**：状态栏与会话标签合并为约 **38dp** 单行（参考 Termux / Termius / ConnectBot 紧凑 chrome）；去掉双行「已连接 · 保活中」，状态进圆点 tooltip；文件 / 键盘 / 断开 / 更多与标签同行；单会话不再重复显示主机标题。
@@ -117,7 +121,7 @@ flutter run   # 需连接设备 / 模拟器
 - **安全密钥存储**：密码 / 私钥 / 口令经 `flutter_secure_storage` 保存；SharedPreferences 仅存主机元数据；启动时迁移旧明文。
 - **双栏文件浏览器**：宽屏（≥600dp）左本地 / 右远程，支持上传、下载、远程 mkdir/删除；窄屏可切换显示本地栏。应用私有目录仍用 dart:io。公共 `Download` / `Downloads`（含子目录）在 API 29+ 合并 **MediaStore.Downloads**（以及 Files/图片音视频）列出 apk/pdf/图片，上传经 content Uri 读取。点「选择文件夹」走 SAF `ACTION_OPEN_DOCUMENT_TREE`（可持久读权限），用 DocumentFile 列出真实文件。不依赖「所有文件访问」。
 - **会话日志**：设置页可查看近期连接 / 密钥 / 文件操作事件。
-- **安装**：从 [GitHub Releases](https://github.com/Ghostpanter/ssh-pad-flutter/releases) 下载 APK（`v0.5.11`）。
+- **安装**：从 [GitHub Releases](https://github.com/Ghostpanter/ssh-pad-flutter/releases) 下载 APK（`v0.5.16`）。
 - **卓易通**：在鸿蒙 NEXT 的卓易通容器中运行时，App 会检测到并提示「当前运行在卓易通环境，SSH Pad 不支持，即将退出。」后主动退出——这是设计行为，不做兼容；普通 Android（含华为/荣耀 EMUI、HarmonyOS 2–4）不受影响。检测信号：安装来源 `com.zhuoyi.appstore.lite`、`/proc/self/cgroup` 含 `isulad`/`zhuoyi`、Build 字段含 `zhuoyi`（任一即判定）；弱信号（`/lxc/`、卓易通宿主包、zyt 属性等）须再叠加华为/鸿蒙特征才判定。详见 `ZhuoyitongGuard.kt`，`adb logcat -s SshPadMain` 可看命中信号。
 
 ### 自行签名发版
@@ -151,6 +155,14 @@ flutter build apk --release
 2. 若软键盘未出：点工具栏键盘图标，或 ExtraKeys「键盘」，或菜单「键盘（软键盘）」→ 再点终端区域 → **系统软键盘应出现**；ExtraKeys 保持可见。
 3. 接上真·蓝牙键盘：ExtraKeys 全键条可收起，但底部仍有「键盘」开关；点「键盘」可强制唤起软 IME（不依赖误检）。
 4. 一加 Pad Ace 2 Pro / ColorOS：即使系统误报有硬件键盘，点「键盘」仍必须能弹出软键盘。
+
+## 终端与文件并排自测（v0.5.16）
+
+1. 平板横屏连接一台 SSH 主机，点顶栏文件夹图标：终端右侧应出现文件栏，列出远程目录；再点一次应收起。菜单里「显示/隐藏文件栏」同样有效。
+2. 在文件栏上传或下载时，终端应仍可输入，PTY 不应卡住。
+3. 点文件栏「显示本地」，应能看到 Download（含「授予所有文件访问权限」和「选择文件」）。
+4. 拖动中间分割条可改文件栏宽度；旋转或重进后开关和宽度应保持。
+5. 手机或窄屏：点文件夹仍会切到原来的文件页，而不是把两端挤在一行。
 
 ## 本地 Download 与选区（v0.5.10）
 

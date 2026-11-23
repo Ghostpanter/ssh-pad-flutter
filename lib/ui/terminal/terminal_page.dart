@@ -7,10 +7,14 @@ import '../../core/ime/ime_controller.dart';
 import '../../core/session/session_manager.dart';
 import '../../core/session/terminal_session.dart';
 import '../../data/host_profile.dart';
+import '../../data/host_store.dart';
 import '../files/files_page.dart';
+import '../pad/pad_breakpoints.dart';
 import '../widgets/session_status.dart';
 import '../keyboard/app_escape_policy.dart';
 import 'extra_keys.dart';
+import 'files_beside_split.dart';
+import 'files_pane_controller.dart';
 import 'hardware_keyboard_handler.dart';
 import 'snippet_bar.dart';
 import 'terminal_selection.dart';
@@ -47,6 +51,10 @@ class _TerminalPageState extends ConsumerState<TerminalPage>
   /// User override: force soft IME even when HW keyboard is (mis)detected.
   bool _forceSoftIme = false;
   Size? _lastViewSize;
+  final _filesPane = FilesPaneController();
+  double _contentWidth = 0;
+  String? _openingFilesHostId;
+  final Set<String> _attemptedFilesHosts = {};
 
   @override
   void initState() {
@@ -54,7 +62,21 @@ class _TerminalPageState extends ConsumerState<TerminalPage>
     WidgetsBinding.instance.addObserver(this);
     HardwareKeyboard.instance.addHandler(_onKey);
     _handlerRegistered = true;
-    WidgetsBinding.instance.addPostFrameCallback((_) => _refreshHwKeyboard());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _refreshHwKeyboard();
+      _loadFilesPanePrefs();
+    });
+  }
+
+  void _loadFilesPanePrefs() {
+    final prefs = ref.read(sharedPreferencesProvider);
+    _filesPane.loadFrom(prefs);
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _persistFilesPane() async {
+    final prefs = ref.read(sharedPreferencesProvider);
+    await _filesPane.persistTo(prefs);
   }
 
   @override
@@ -68,6 +90,7 @@ class _TerminalPageState extends ConsumerState<TerminalPage>
     for (final c in _termControllers.values) {
       c.dispose();
     }
+    _filesPane.dispose();
     super.dispose();
   }
 
@@ -155,19 +178,85 @@ class _TerminalPageState extends ConsumerState<TerminalPage>
     });
   }
 
-  Future<void> _openFiles() async {
-    if (widget.onOpenFiles != null) {
-      widget.onOpenFiles!();
+  bool _supportsFiles(HostProfile profile) =>
+      profile.protocol == HostProtocol.ssh ||
+      profile.protocol == HostProtocol.sftp;
+
+  Future<void> _ensureFilesAttached(HostProfile profile) async {
+    if (!_supportsFiles(profile)) return;
+    final mgr = ref.read(sessionManagerProvider);
+    final existing = mgr.fileSessionForHost(profile.id);
+    if (existing != null &&
+        (existing.phase == SessionPhase.connected ||
+            existing.phase == SessionPhase.connecting)) {
+      if (mgr.activeFileId != existing.id) {
+        mgr.setActiveFile(existing.id);
+      }
       return;
     }
+    if (_openingFilesHostId == profile.id) return;
+    if (_attemptedFilesHosts.contains(profile.id)) return;
+    _openingFilesHostId = profile.id;
+    _attemptedFilesHosts.add(profile.id);
+    try {
+      await mgr.openFiles(profile);
+    } finally {
+      if (_openingFilesHostId == profile.id) {
+        _openingFilesHostId = null;
+      }
+    }
+  }
+
+  void _syncFilesPane(SessionManager mgr, TerminalSession? active) {
+    if (active == null || !_filesPane.isVisibleAt(_contentWidth)) return;
+    if (!_supportsFiles(active.profile)) return;
+    final existing = mgr.fileSessionForHost(active.profile.id);
+    if (existing != null) {
+      if (mgr.activeFileId != existing.id) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          final m = ref.read(sessionManagerProvider);
+          final f = m.fileSessionForHost(active.profile.id);
+          if (f != null && m.activeFileId != f.id) {
+            m.setActiveFile(f.id);
+          }
+        });
+      }
+      return;
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_filesPane.isVisibleAt(_contentWidth)) return;
+      final current = ref.read(sessionManagerProvider).active;
+      if (current == null || current.id != active.id) return;
+      _ensureFilesAttached(current.profile);
+    });
+  }
+
+  Future<void> _setFilesPaneOpen(bool open) async {
+    if (open) _attemptedFilesHosts.clear();
+    setState(() => _filesPane.setOpen(open));
+    await _persistFilesPane();
+    if (!open || !mounted) return;
+    final active = ref.read(sessionManagerProvider).active;
+    if (active != null) await _ensureFilesAttached(active.profile);
+  }
+
+  Future<void> _openFiles() async {
     final active = ref.read(sessionManagerProvider).active;
     if (active == null) return;
-    if (active.profile.protocol != HostProtocol.ssh &&
-        active.profile.protocol != HostProtocol.sftp) {
+    if (!_supportsFiles(active.profile)) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('仅 SSH/SFTP 会话可打开文件')),
       );
+      return;
+    }
+    if (PadBreakpoints.canShowFilesBeside(_contentWidth)) {
+      await _setFilesPaneOpen(!_filesPane.open);
+      return;
+    }
+    if (widget.onOpenFiles != null) {
+      widget.onOpenFiles!();
       return;
     }
     await openFileBrowser(context, ref, active.profile.asSftp());
@@ -275,12 +364,14 @@ class _TerminalPageState extends ConsumerState<TerminalPage>
   }
 
   Widget _chromeAction({
+    Key? key,
     required String tooltip,
     required IconData icon,
     required VoidCallback? onPressed,
     Color? color,
   }) {
     return IconButton(
+      key: key,
       tooltip: tooltip,
       onPressed: onPressed,
       icon: Icon(icon, size: 18, color: color),
@@ -308,8 +399,12 @@ class _TerminalPageState extends ConsumerState<TerminalPage>
     final actions = <Widget>[
       if (active != null) ...[
         _chromeAction(
-          tooltip: '打开文件 (SFTP)',
-          icon: Icons.folder_open_outlined,
+          key: const Key('files-beside-toggle'),
+          tooltip: _filesPane.isVisibleAt(_contentWidth) ? '隐藏文件栏' : '显示文件栏',
+          icon: _filesPane.isVisibleAt(_contentWidth)
+              ? Icons.folder
+              : Icons.folder_open_outlined,
+          color: _filesPane.isVisibleAt(_contentWidth) ? scheme.primary : null,
           onPressed: _openFiles,
         ),
         if (mgr.canReconnect(active) || mgr.isReconnecting(active.id))
@@ -359,7 +454,12 @@ class _TerminalPageState extends ConsumerState<TerminalPage>
         itemBuilder: (_) => [
           const PopupMenuItem(value: 'copy', child: Text('复制选区')),
           const PopupMenuItem(value: 'paste', child: Text('粘贴')),
-          const PopupMenuItem(value: 'files', child: Text('打开文件 (SFTP)')),
+          PopupMenuItem(
+            value: 'files',
+            child: Text(
+              _filesPane.isVisibleAt(_contentWidth) ? '隐藏文件栏' : '显示文件栏',
+            ),
+          ),
           PopupMenuItem(
             value: 'kbd',
             child: Text(_forceSoftIme ? '关闭软键盘强制' : '键盘（软键盘）'),
@@ -464,7 +564,21 @@ class _TerminalPageState extends ConsumerState<TerminalPage>
     // Keep Esc→PTY sink in sync (side-effect registration; AppEscapePolicy is
     // the single sender so TerminalView never also emits 0x1b for Esc).
     _syncEscapeSink(active, mgr);
+    _syncFilesPane(mgr, active);
 
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        _contentWidth = constraints.maxWidth;
+        return _buildScaffold(context, mgr, active, _terminalBody(context, mgr, active));
+      },
+    );
+  }
+
+  Widget _terminalBody(
+    BuildContext context,
+    SessionManager mgr,
+    TerminalSession? active,
+  ) {
     final body = active == null
         ? Center(
             child: Column(
@@ -541,6 +655,43 @@ class _TerminalPageState extends ConsumerState<TerminalPage>
             ],
           );
 
+    final showFiles = active != null &&
+        _supportsFiles(active.profile) &&
+        _filesPane.isVisibleAt(_contentWidth);
+    if (!showFiles) return body;
+
+    final fileSession = mgr.fileSessionForHost(active.profile.id);
+    final files = fileSession == null
+        ? const Center(child: CircularProgressIndicator())
+        : FilesPage(
+            key: ValueKey(fileSession.id),
+            sessionId: fileSession.id,
+            embedded: true,
+            sidePane: true,
+            onClosePane: () => _setFilesPaneOpen(false),
+          );
+    return FilesBesideSplit(
+      key: const Key('files-beside-pane'),
+      contentWidth: _contentWidth,
+      paneWidth: _filesPane.width,
+      terminal: body,
+      files: files,
+      onPaneDrag: (delta) {
+        setState(() => _filesPane.setWidth(
+              _filesPane.width + delta,
+              _contentWidth,
+            ));
+      },
+      onPaneDragEnd: _persistFilesPane,
+    );
+  }
+
+  Widget _buildScaffold(
+    BuildContext context,
+    SessionManager mgr,
+    TerminalSession? active,
+    Widget body,
+  ) {
     if (widget.embedded) {
       return Column(
         children: [

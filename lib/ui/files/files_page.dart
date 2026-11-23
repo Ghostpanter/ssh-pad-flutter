@@ -21,10 +21,23 @@ import 'local_storage_channel.dart';
 /// Wide (≥600dp): left local, right remote. Narrow: remote-only with
 /// upload picker still available (toggle local sheet).
 class FilesPage extends ConsumerStatefulWidget {
-  const FilesPage({super.key, this.sessionId, this.embedded = false});
+  const FilesPage({
+    super.key,
+    this.sessionId,
+    this.embedded = false,
+    this.sidePane = false,
+    this.onClosePane,
+  });
 
   final String? sessionId;
   final bool embedded;
+
+  /// Compact layout for the terminal side pane: no extra title SafeArea,
+  /// stacked local/remote instead of a squeezed dual pane, hide-pane action.
+  final bool sidePane;
+
+  /// Called when the user hides the side pane (SFTP session stays attached).
+  final VoidCallback? onClosePane;
 
   @override
   ConsumerState<FilesPage> createState() => _FilesPageState();
@@ -134,6 +147,16 @@ class _FilesPageState extends ConsumerState<FilesPage>
         _loadingRemote = false;
       });
       sessionLog.add('Remote list failed: $e', level: SessionLogLevel.error);
+    }
+  }
+
+  @override
+  void didUpdateWidget(FilesPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.sessionId != widget.sessionId) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _reloadRemote();
+      });
     }
   }
 
@@ -531,6 +554,10 @@ class _FilesPageState extends ConsumerState<FilesPage>
   }
 
   Future<void> _close() async {
+    if (widget.sidePane && widget.onClosePane != null) {
+      widget.onClosePane!();
+      return;
+    }
     final s = _session;
     if (s != null) {
       await ref.read(sessionManagerProvider).closeFile(s.id);
@@ -897,136 +924,154 @@ class _FilesPageState extends ConsumerState<FilesPage>
   @override
   Widget build(BuildContext context) {
     ref.watch(sessionManagerProvider);
-    final wide = MediaQuery.sizeOf(context).width >= PadBreakpoints.split;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // Use this widget's width, not the screen: a side pane is narrow
+        // even on a tablet, and must not try to host a local+remote split.
+        final wide = !widget.sidePane &&
+            constraints.maxWidth >= PadBreakpoints.split;
 
-    final remoteActions = <Widget>[
-      if (!wide)
-        IconButton(
-          tooltip: _showLocalNarrow ? '隐藏本地' : '显示本地',
-          visualDensity: VisualDensity.compact,
-          onPressed: () => setState(() => _showLocalNarrow = !_showLocalNarrow),
-          icon: Icon(
-            _showLocalNarrow
-                ? Icons.phone_android
-                : Icons.phone_android_outlined,
-            size: 18,
-          ),
-        ),
-      IconButton(
-        tooltip: '上级目录',
-        visualDensity: VisualDensity.compact,
-        onPressed: _busy ? null : _goUpRemote,
-        icon: const Icon(Icons.arrow_upward, size: 18),
-      ),
-      IconButton(
-        tooltip: '刷新',
-        visualDensity: VisualDensity.compact,
-        onPressed: _busy ? null : _reloadRemote,
-        icon: const Icon(Icons.refresh, size: 18),
-      ),
-      IconButton(
-        tooltip: '新建文件夹',
-        visualDensity: VisualDensity.compact,
-        onPressed: _busy ? null : _mkdirRemote,
-        icon: const Icon(Icons.create_new_folder_outlined, size: 18),
-      ),
-      IconButton(
-        tooltip: '上传（选取文件）',
-        visualDensity: VisualDensity.compact,
-        onPressed: _busy ? null : _uploadPicked,
-        icon: const Icon(Icons.upload_file, size: 18),
-      ),
-      IconButton(
-        tooltip: '断开',
-        visualDensity: VisualDensity.compact,
-        onPressed: _close,
-        icon: const Icon(Icons.link_off, size: 18),
-      ),
-    ];
-
-    final scheme = Theme.of(context).colorScheme;
-    final body = wide
-        ? Row(
-            children: [
-              Expanded(
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    border: Border(
-                      right: BorderSide(
-                        color: scheme.outline.withValues(alpha: 0.35),
-                      ),
-                    ),
-                  ),
-                  child: _localPane(),
-                ),
-              ),
-              Expanded(child: _remotePane(actions: remoteActions)),
-            ],
-          )
-        : Column(
-            children: [
-              if (_showLocalNarrow)
-                SizedBox(
-                  height: MediaQuery.sizeOf(context).height * 0.35,
-                  child: _localPane(),
-                ),
-              if (_showLocalNarrow) const Divider(height: 1),
-              Expanded(child: _remotePane(actions: remoteActions)),
-            ],
-          );
-
-    if (widget.embedded) {
-      return Column(
-        children: [
-          Material(
-            color: scheme.surfaceContainerHighest,
-            child: SafeArea(
-              bottom: false,
-              child: Container(
-                height: 44,
-                decoration: BoxDecoration(
-                  border: Border(
-                    bottom: BorderSide(
-                      color: scheme.outline.withValues(alpha: 0.45),
-                    ),
-                  ),
-                ),
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                alignment: Alignment.centerLeft,
-                child: Row(
-                  children: [
-                    Icon(Icons.folder_open, size: 18, color: scheme.primary),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        _session?.keepAliveTitle ?? '文件',
-                        style: const TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w700,
-                        ),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                    Text(
-                      wide ? '双栏' : '远程',
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: scheme.onSurfaceVariant,
-                      ),
-                    ),
-                  ],
-                ),
+        final remoteActions = <Widget>[
+          if (!wide)
+            IconButton(
+              tooltip: _showLocalNarrow ? '隐藏本地' : '显示本地',
+              visualDensity: VisualDensity.compact,
+              onPressed: () =>
+                  setState(() => _showLocalNarrow = !_showLocalNarrow),
+              icon: Icon(
+                _showLocalNarrow
+                    ? Icons.phone_android
+                    : Icons.phone_android_outlined,
+                size: 18,
               ),
             ),
+          IconButton(
+            tooltip: '上级目录',
+            visualDensity: VisualDensity.compact,
+            onPressed: _busy ? null : _goUpRemote,
+            icon: const Icon(Icons.arrow_upward, size: 18),
           ),
-          Expanded(child: body),
-        ],
-      );
-    }
+          IconButton(
+            tooltip: '刷新',
+            visualDensity: VisualDensity.compact,
+            onPressed: _busy ? null : _reloadRemote,
+            icon: const Icon(Icons.refresh, size: 18),
+          ),
+          IconButton(
+            tooltip: '新建文件夹',
+            visualDensity: VisualDensity.compact,
+            onPressed: _busy ? null : _mkdirRemote,
+            icon: const Icon(Icons.create_new_folder_outlined, size: 18),
+          ),
+          IconButton(
+            tooltip: '上传（选取文件）',
+            visualDensity: VisualDensity.compact,
+            onPressed: _busy ? null : _uploadPicked,
+            icon: const Icon(Icons.upload_file, size: 18),
+          ),
+          IconButton(
+            tooltip: widget.sidePane ? '隐藏文件栏' : '断开',
+            visualDensity: VisualDensity.compact,
+            onPressed: _close,
+            icon: Icon(
+              widget.sidePane ? Icons.close : Icons.link_off,
+              size: 18,
+            ),
+          ),
+        ];
 
-    return Scaffold(
-      appBar: AppBar(title: Text(_session?.keepAliveTitle ?? '文件')),
-      body: body,
+        final scheme = Theme.of(context).colorScheme;
+        final localHeight = widget.sidePane
+            ? (constraints.maxHeight * 0.38).clamp(140.0, 280.0)
+            : MediaQuery.sizeOf(context).height * 0.35;
+        final body = wide
+            ? Row(
+                children: [
+                  Expanded(
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        border: Border(
+                          right: BorderSide(
+                            color: scheme.outline.withValues(alpha: 0.35),
+                          ),
+                        ),
+                      ),
+                      child: _localPane(),
+                    ),
+                  ),
+                  Expanded(child: _remotePane(actions: remoteActions)),
+                ],
+              )
+            : Column(
+                children: [
+                  if (_showLocalNarrow)
+                    SizedBox(
+                      height: localHeight,
+                      child: _localPane(),
+                    ),
+                  if (_showLocalNarrow) const Divider(height: 1),
+                  Expanded(child: _remotePane(actions: remoteActions)),
+                ],
+              );
+
+        if (widget.sidePane) {
+          return body;
+        }
+
+        if (widget.embedded) {
+          return Column(
+            children: [
+              Material(
+                color: scheme.surfaceContainerHighest,
+                child: SafeArea(
+                  bottom: false,
+                  child: Container(
+                    height: 44,
+                    decoration: BoxDecoration(
+                      border: Border(
+                        bottom: BorderSide(
+                          color: scheme.outline.withValues(alpha: 0.45),
+                        ),
+                      ),
+                    ),
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    alignment: Alignment.centerLeft,
+                    child: Row(
+                      children: [
+                        Icon(Icons.folder_open, size: 18, color: scheme.primary),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            _session?.keepAliveTitle ?? '文件',
+                            style: const TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w700,
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        Text(
+                          wide ? '双栏' : '远程',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: scheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              Expanded(child: body),
+            ],
+          );
+        }
+
+        return Scaffold(
+          appBar: AppBar(title: Text(_session?.keepAliveTitle ?? '文件')),
+          body: body,
+        );
+      },
     );
   }
 }

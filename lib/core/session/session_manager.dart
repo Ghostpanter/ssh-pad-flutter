@@ -71,6 +71,20 @@ class SessionManager extends ChangeNotifier {
     return _files.last;
   }
 
+  /// File browser for [hostId], preferring a live (connected/connecting) one.
+  FileBrowserSession? fileSessionForHost(String hostId) {
+    FileBrowserSession? fallback;
+    for (final f in _files) {
+      if (f.profile.id != hostId) continue;
+      if (f.phase == SessionPhase.connected ||
+          f.phase == SessionPhase.connecting) {
+        return f;
+      }
+      fallback ??= f;
+    }
+    return fallback;
+  }
+
   /// Reload password/key from secure storage every connect attempt.
   Future<HostProfile> _withFreshSecrets(HostProfile profile) async {
     final store = _hostStore;
@@ -182,6 +196,20 @@ class SessionManager extends ChangeNotifier {
   /// Register an externally-built session (tests / restore).
   @visibleForTesting
   void addTerminalForTest(TerminalSession session) => _attach(session);
+
+  /// Register an externally-built file session (tests).
+  @visibleForTesting
+  void addFileForTest(FileBrowserSession session) {
+    session.onChanged = () {
+      if (!_disposed) {
+        notifyListeners();
+        _syncKeepAlive();
+      }
+    };
+    _files.add(session);
+    _activeFileId = session.id;
+    notifyListeners();
+  }
 
   void _attach(TerminalSession session) {
     session.onChanged = () {
