@@ -1,6 +1,4 @@
-import 'dart:async';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:dartssh2/dartssh2.dart';
 
@@ -63,6 +61,7 @@ class PortForwardRunner {
           spec.listenPort,
         );
         final sub = server.listen((socket) async {
+          _tuneSocket(socket);
           try {
             final channel = await client.forwardLocal(
               spec.targetHost,
@@ -93,6 +92,7 @@ class PortForwardRunner {
               spec.targetPort,
               timeout: const Duration(seconds: 10),
             );
+            _tuneSocket(socket);
             _bridge(socket, channel);
           } catch (e) {
             sessionLog.add('远端转发接入失败: $e', level: SessionLogLevel.warn);
@@ -112,34 +112,42 @@ class PortForwardRunner {
     }
   }
 
+  /// Full-duplex copy with backpressure.
+  ///
+  /// [SSHSocket.sink.add] on a forward channel only enqueues. [StreamSink.addStream]
+  /// pauses the source when the SSH window (or the TCP buffer) is full, which
+  /// is what `io.Copy` does in Go. Half-close one side when the other ends.
   void _bridge(Socket socket, SSHSocket channel) {
-    late final StreamSubscription<Uint8List> inbound;
-    inbound = socket.listen(
-      (data) {
-        channel.sink.add(data);
-      },
-      onError: (_) {
-        channel.close();
-      },
-      onDone: () {
-        channel.close();
-      },
-      cancelOnError: true,
-    );
-    channel.stream.listen(
-      (data) {
-        socket.add(data);
-      },
-      onError: (_) {
-        inbound.cancel();
+    var dead = false;
+    void destroyBoth() {
+      if (dead) return;
+      dead = true;
+      try {
+        channel.destroy();
+      } catch (_) {}
+      try {
         socket.destroy();
-      },
-      onDone: () {
-        inbound.cancel();
-        socket.destroy();
-      },
-      cancelOnError: true,
-    );
+      } catch (_) {}
+    }
+
+    channel.sink.addStream(socket).then((_) {
+      if (dead) return;
+      channel.close();
+    }, onError: (Object _) {
+      destroyBoth();
+    });
+    socket.addStream(channel.stream).then((_) {
+      if (dead) return;
+      socket.close();
+    }, onError: (Object _) {
+      destroyBoth();
+    });
+  }
+
+  void _tuneSocket(Socket socket) {
+    try {
+      socket.setOption(SocketOption.tcpNoDelay, true);
+    } catch (_) {}
   }
 }
 

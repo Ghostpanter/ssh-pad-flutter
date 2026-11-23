@@ -153,6 +153,7 @@ class HostProfile {
     this.tags = const [],
     this.jumpHostId,
     this.forwards = const [],
+    this.forwardAgent = false,
   }) : port = port ?? protocol.defaultPort ?? 22;
 
   final String id;
@@ -180,6 +181,10 @@ class HostProfile {
   final String? jumpHostId;
   final List<ForwardSpec> forwards;
 
+  /// Offer this host's private key to the remote via `auth-agent-req` (`ssh -A`).
+  /// Off unless the user turns it on. Password sessions ignore it.
+  final bool forwardAgent;
+
   HostProfile copyWith({
     String? id,
     String? name,
@@ -201,6 +206,7 @@ class HostProfile {
     String? jumpHostId,
     bool clearJump = false,
     List<ForwardSpec>? forwards,
+    bool? forwardAgent,
   }) {
     return HostProfile(
       id: id ?? this.id,
@@ -222,6 +228,7 @@ class HostProfile {
       tags: tags ?? this.tags,
       jumpHostId: clearJump ? null : (jumpHostId ?? this.jumpHostId),
       forwards: forwards ?? this.forwards,
+      forwardAgent: forwardAgent ?? this.forwardAgent,
     );
   }
 
@@ -252,6 +259,7 @@ class HostProfile {
           'jumpHostId': jumpHostId,
         if (forwards.isNotEmpty)
           'forwards': forwards.map((f) => f.toJson()).toList(),
+        if (forwardAgent) 'forwardAgent': true,
         // Marker: secrets live in flutter_secure_storage when saveSecret.
         'secretsInSecureStore': true,
       };
@@ -290,6 +298,7 @@ class HostProfile {
           .whereType<Map>()
           .map((e) => ForwardSpec.fromJson(Map<String, dynamic>.from(e)))
           .toList(),
+      forwardAgent: json['forwardAgent'] as bool? ?? false,
     );
   }
 }

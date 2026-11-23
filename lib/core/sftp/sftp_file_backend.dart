@@ -7,6 +7,14 @@ import '../session/file_backend.dart';
 import '../ssh/ssh_connection_hub.dart';
 import '../ssh/ssh_connector.dart';
 
+/// OpenSSH `DEFAULT_NUM_REQUESTS` is 64. dartssh2's [SftpFile.read] and
+/// [SftpFile.writeBytes] default to 16 KiB packets; its own fast download
+/// path uses 64 KiB. That is the bulk-copy window a Go sftp client gets
+/// from a larger packet plus a bounded pipeline, without holding more than
+/// one file in memory beyond what the caller already asked for.
+const int kSftpChunkSize = 64 * 1024;
+const int kSftpMaxPending = 64;
+
 /// SFTP via dartssh2 [SftpClient].
 ///
 /// Prefer a [SshConnectionHub] so Files attaches to an existing SSH session
@@ -144,7 +152,11 @@ class SftpFileBackend implements FileBackend {
           SftpFileOpenMode.truncate,
     );
     try {
-      await file.writeBytes(bytes);
+      await file.writeBytes(
+        bytes,
+        chunkSize: kSftpChunkSize,
+        maxPendingRequests: kSftpMaxPending,
+      );
     } finally {
       await file.close();
     }
@@ -159,7 +171,10 @@ class SftpFileBackend implements FileBackend {
     final file = await sftp.open(path, mode: SftpFileOpenMode.read);
     try {
       final builder = BytesBuilder(copy: false);
-      await for (final chunk in file.read()) {
+      await for (final chunk in file.read(
+        chunkSize: kSftpChunkSize,
+        maxPendingRequests: kSftpMaxPending,
+      )) {
         builder.add(chunk);
       }
       return builder.takeBytes();

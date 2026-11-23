@@ -67,6 +67,7 @@ void main() {
       forwards: const [
         ForwardSpec(kind: ForwardKind.socks, listenPort: 1080),
       ],
+      forwardAgent: true,
     );
     final sftp = ssh.asSftp();
     expect(sftp.protocol, HostProtocol.sftp);
@@ -74,10 +75,23 @@ void main() {
     expect(sftp.group, 'prod');
     expect(sftp.tags, ['db']);
     expect(sftp.forwards.single.label, 'D 1080');
+    expect(sftp.forwardAgent, isTrue);
     final json = sftp.toJson();
     expect(json.containsKey('password'), isFalse);
+    expect(json['forwardAgent'], isTrue);
     final restored = HostProfile.fromJson(json);
     expect(restored.jumpHostId, 'bastion');
     expect(restored.forwards.single.kind, ForwardKind.socks);
+    expect(restored.forwardAgent, isTrue);
+  });
+
+  test('forwardAgent stays off when the field is absent', () {
+    final restored = HostProfile.fromJson({
+      'id': 'a',
+      'name': 'a',
+      'host': 'h',
+    });
+    expect(restored.forwardAgent, isFalse);
+    expect(restored.toJson().containsKey('forwardAgent'), isFalse);
   });
 }

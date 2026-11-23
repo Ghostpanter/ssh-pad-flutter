@@ -32,6 +32,7 @@ class _HostEditorPageState extends ConsumerState<HostEditorPage> {
   late FtpSecureMode _ftpSecure;
   late bool _ftpPassive;
   late bool _saveSecret;
+  late bool _forwardAgent;
   String? _jumpHostId;
 
   @override
@@ -44,6 +45,7 @@ class _HostEditorPageState extends ConsumerState<HostEditorPage> {
     _ftpSecure = e?.ftpSecure ?? FtpSecureMode.none;
     _ftpPassive = e?.ftpPassive ?? true;
     _saveSecret = e?.saveSecret ?? false;
+    _forwardAgent = e?.forwardAgent ?? false;
     _name = TextEditingController(text: e?.name ?? '');
     _host = TextEditingController(text: e?.host ?? '');
     _port = TextEditingController(
@@ -137,6 +139,9 @@ class _HostEditorPageState extends ConsumerState<HostEditorPage> {
       forwards: _protocol == HostProtocol.ssh || _protocol == HostProtocol.sftp
           ? List<ForwardSpec>.from(_forwards)
           : const [],
+      forwardAgent: _forwardAgent &&
+          _auth == AuthMethod.key &&
+          (_protocol == HostProtocol.ssh || _protocol == HostProtocol.sftp),
     );
   }
 
@@ -481,6 +486,15 @@ class _HostEditorPageState extends ConsumerState<HostEditorPage> {
                 icon: const Icon(Icons.upload_file),
                 label: const Text('从文件导入私钥'),
               ),
+            ),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('转发 SSH agent'),
+              subtitle: const Text(
+                '等同 ssh -A。远端可以用这把私钥再登录别的机器。默认关。',
+              ),
+              value: _forwardAgent,
+              onChanged: (v) => setState(() => _forwardAgent = v),
             ),
           ],
           if (_protocol == HostProtocol.ftp) ...[
