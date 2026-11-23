@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -81,7 +82,7 @@ class SshConnector {
       onUserInfoRequest: interactive == null
           ? null
           : (request) => interactive(profile, request),
-      agentHandler: forwardAgent ? SSHKeyPairAgent(identities!) : null,
+      agentHandler: forwardAgent ? SSHKeyPairAgent(identities) : null,
       // Leave pipelining off. dartssh2 treats pty-req as optional, so a
       // pipelined refusal would still start the shell. A terminal needs
       // that refusal to abort, the way the sequential path already does.
